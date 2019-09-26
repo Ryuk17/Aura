@@ -1,6 +1,6 @@
 ## Welcome to Ryuk
 
-This repository is speech processing lib for Speech processing, Speech ehancement, Speech separation,Speech recognition.
+This repository is a speech processing libray for Speech processing, Speech ehancement, Speech separation,Speech recognition.
 
 
 ### Markdown
