@@ -1,8 +1,7 @@
 ## Welcome to Ryuk
 
-You can use the [editor on GitHub](https://github.com/DandelionLau/Ryuk/edit/master/README.md) to maintain and preview the content for your website in Markdown files.
+This repository is speech processing lib for Speech processing, Speech ehancement, Speech separation,Speech recognition.
 
-Whenever you commit to this repository, GitHub Pages will run [Jekyll](https://jekyllrb.com/) to rebuild the pages in your site, from the content in your Markdown files.
 
 ### Markdown
 
