@@ -9,7 +9,41 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import wave
+from scipy import special
 
+def windows(samples, beta=8.5, type='Rectangle'):
+    """
+    calculate the output of different windows
+    :param samples: samples
+    :param beta: parameter for kaiser window
+    :param type: window type
+    :return: data after windowed
+    """
+    N = len(samples)
+    data = samples
+    if type == 'Retangle':
+        data = samples
+    elif type == 'Triangle':
+        for i in range(N):
+            if i < N:
+                data[i] = 2 * i / (N - 1)
+            else:
+                data[i] = 2 - 2 * i / (N - 1)
+    elif type == 'Hamming':
+        for i in range(N):
+            data[i] = 0.54 - 0.56 * np.cos(2 * np.pi * i / (N - 1))
+    elif type == 'Hanning':
+        for i in range(N):
+            data[i] = 0.5 * (1 - np.cos(2 * np.pi * i / (N - 1)))
+    elif type == 'Blackman':
+        for i in range(N):
+            data[i] = 0.42 - 0.5 * (1 - np.cos(2 * np.pi * i / (N - 1))) + 0.08 * np.cos(4 * np.pi * i / (N - 1))
+    elif type == 'Kaiser':
+        for i in range(N):
+            data[i] = special.j0(beta * np.sqrt(1 - np.square(1 - 2 * i /(N - 1)))) / special.j0(beta)
+    else:
+        raise NameError('Unrecongnized window type')
+    return data
 
 def displaySpeech(sample):
     """
@@ -27,7 +61,7 @@ def displaySpeech(sample):
     plt.show()
 
 
-def shortEnergy(sample_name, overlapping=0, window_length=20, window_type='rectangle', display=True):
+def shortEnergy(sample_name, overlapping=0, window_length=20, window_type='Rectangle', display=True):
     """
     calculate the short energy of a given sample
     :param sample_name: speech sample name
@@ -61,7 +95,7 @@ def shortEnergy(sample_name, overlapping=0, window_length=20, window_type='recta
 
 
 
-def shortZcc(sample_name, overlapping=0, window_length=240, window_type='rectangle', display=True):
+def shortZcc(sample_name, overlapping=0, window_length=20, window_type='Rectangle', display=True):
     """
     calculate the short count of a given sample
     :param sample_name: speech sample name
@@ -95,3 +129,6 @@ def shortZcc(sample_name, overlapping=0, window_length=240, window_type='rectang
 
     sample.close()
     return zcc
+
+def shortCorrelation(sample_name, overlapping=0, window_length=20, window_type='Rectangle', display=True):
+    pass
