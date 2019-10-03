@@ -8,14 +8,24 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-import wave
 from scipy import special
 
 
-def preEmphasis(sample_name, alpha=0.9375, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def getParams(param):
+    """
+    unpack paramters
+    :param param: speech paramters
+    :return: nchannels, sampwidth, framerate, nframes, comptype, compname
+    """
+    nchannels, sampwidth, framerate, nframes, comptype, compname = param[0], param[1], param[2], param[3], param[4], param[5]
+    return nchannels, sampwidth, framerate, nframes, comptype, compname
+
+
+def preEmphasis(samples, params, alpha=0.9375, overlapping=0, window_length=240, window_type='Rectangle', display=True):
     """
     per emphasis speech
-    :param sample_name: speech sample name
+    :param samples: sample data
+    :param param: speech parameters
     :param alpha: parameter
     :param overlapping: overlapping length
     :param window_length: the length of window
@@ -25,21 +35,18 @@ def preEmphasis(sample_name, alpha=0.9375, overlapping=0, window_length=240, win
     """
 
     # get basic information
-    sample = wave.open(sample_name)
-    nchannels, sampwidth, framerate, nframes, comptype, compname = sample.getparams()
-    str_data = sample.readframes(nframes)
-    wave_data = np.fromstring(str_data, dtype=np.short)
+    nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
 
-    y = np.zeros(len(wave_data))
-    y[0] = wave_data[0]
+    y = np.zeros(len(samples))
+    y[0] = samples[0]
 
     # pre emphasis
-    for i in range(1, len(wave_data)):
-        y[i] = wave_data[i] - alpha * wave_data[i-1]
+    for i in range(1, len(samples)):
+        y[i] = samples[i] - alpha * samples[i-1]
 
     if display:
         time = np.arange(0, nframes) * (1.0 / framerate)
-        plt.plot(time, wave_data)
+        plt.plot(time, samples)
         plt.title("Pre-emphasis")
         plt.ylabel("Waveform")
         plt.xlabel("Time (seconds)")
@@ -83,19 +90,17 @@ def windows(samples, beta=8.5, type='Rectangle'):
     return data
 
 
-def displaySpeech(sample_name):
+def displaySpeech(samples, params):
     """
     display waveform of a given speech sample
     :param sample_name: speech sample name
+    :param params: speech parameters
     :return:
     """
-    sample = wave.open(sample_name)
-    nchannels, sampwidth, framerate, nframes, comptype, compname = sample.getparams()
-    str_data = sample.readframes(nframes)
-    wave_data = np.fromstring(str_data, dtype=np.short)
+    nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
     time = np.arange(0, nframes) * (1.0 / framerate)
 
-    plt.plot(time, wave_data)
+    plt.plot(time, samples)
     plt.title("Speech")
     plt.xlabel("time (seconds)")
     plt.show()
