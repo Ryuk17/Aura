@@ -21,6 +21,22 @@ def getParams(param):
     return nchannels, sampwidth, framerate, nframes, comptype, compname
 
 
+def enframe(samples, overlapping=0, window_length=240, window_type='Rectangle'):
+    """
+    divede samples into frame
+    :param samples:
+    :param frame_num:
+    :param window_length:
+    :param window_type:
+    :return: enframed frames
+    """
+    frame_num = len(samples) // window_length
+    frames = np.zeros([frame_num, window_length])
+    for i in range(frame_num):
+        frames[i] = windows(samples[i*window_length:(i+1)*window_length], type=window_type)
+
+    return frames
+
 def preEmphasis(samples, params, alpha=0.9375, overlapping=0, window_length=240, window_type='Rectangle', display=True):
     """
     per emphasis speech
