@@ -1,14 +1,52 @@
 """
-@ Filename:       base_functions.py
+@ Filename:       basic_functions.py
 @ Author:         Danc1elion
-@ Create Date:    2019-10-01   
-@ Update Date:    2019-10-01 
-@ Description:    Implement base_functions
+@ Create Date:    2019-10-03   
+@ Update Date:    2019-10-03 
+@ Description:    Implement basic_functions
 """
+
 import numpy as np
 import matplotlib.pyplot as plt
 import wave
 from scipy import special
+
+
+def preEmphasis(sample_name, alpha=0.9375, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+    """
+    per emphasis speech
+    :param sample_name: speech sample name
+    :param alpha: parameter
+    :param overlapping: overlapping length
+    :param window_length: the length of window
+    :param window_type: the type of window
+    :param display: whether to display processed speech
+    :return: processed speech
+    """
+
+    # get basic information
+    sample = wave.open(sample_name)
+    nchannels, sampwidth, framerate, nframes, comptype, compname = sample.getparams()
+    str_data = sample.readframes(nframes)
+    wave_data = np.fromstring(str_data, dtype=np.short)
+
+    y = np.zeros(len(wave_data))
+    y[0] = wave_data[0]
+
+    # pre emphasis
+    for i in range(1, len(wave_data)):
+        y[i] = wave_data[i] - alpha * wave_data[i-1]
+
+    if display:
+        time = np.arange(0, nframes) * (1.0 / framerate)
+        plt.plot(time, wave_data)
+        plt.title("Pre-emphasis")
+        plt.ylabel("Waveform")
+        plt.xlabel("Time (seconds)")
+        plt.show()
+
+    return y
+
 
 def windows(samples, beta=8.5, type='Rectangle'):
     """
@@ -44,17 +82,20 @@ def windows(samples, beta=8.5, type='Rectangle'):
         raise NameError('Unrecongnized window type')
     return data
 
-def displaySpeech(sample):
+
+def displaySpeech(sample_name):
     """
     display waveform of a given speech sample
-    :param sample: speech smaple
+    :param sample_name: speech sample name
     :return:
     """
+    sample = wave.open(sample_name)
     nchannels, sampwidth, framerate, nframes, comptype, compname = sample.getparams()
     str_data = sample.readframes(nframes)
     wave_data = np.fromstring(str_data, dtype=np.short)
     time = np.arange(0, nframes) * (1.0 / framerate)
 
     plt.plot(time, wave_data)
+    plt.title("Speech")
     plt.xlabel("time (seconds)")
     plt.show()
