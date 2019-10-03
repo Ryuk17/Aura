@@ -24,16 +24,15 @@ def shortEnergy(samples, params, overlapping=0, window_length=240, window_type='
     nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
 
     # enframe
-    frame_num = len(samples) // window_length
-    energy = np.zeros(frame_num)
+    frames = enframe(samples, overlapping, window_length, window_type)
+    energy = np.zeros(len(frames))
 
     # calculate the short energy
-    for i in range(48, frame_num):
-        frame = windows(samples[i*window_length:(i+1)*window_length], window_type)
-        energy[i] = np.sum(np.array(frame, dtype='int64') ** 2)
+    for i in range(len(frames)):
+        energy[i] = np.sum(np.array(frames[i], dtype='int64') ** 2)
 
     if display:
-        time = np.arange(0, frame_num) * (window_length / framerate)
+        time = np.arange(0, len(frames)) * (window_length / framerate)
         plt.plot(time, energy)
         plt.title("Short Energy")
         plt.ylabel("Short Energy")
@@ -56,18 +55,17 @@ def shortZcc(samples, params, overlapping=0, window_length=240, window_type='Rec
     """
     nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
 
-    frame_num = len(samples) // window_length
-    zcc = np.zeros(frame_num)
+    frames = enframe(samples, overlapping, window_length, window_type)
+    zcc = np.zeros(len(frames))
 
 
-    for i in range(frame_num):
-        frame = windows(samples[i*window_length:(i+1)*window_length], window_type)
-        for j in range(1, window_length):
-            zcc[i] += abs(np.sign(frame[j]) - np.sign(frame[j-1]))
+    for i in range(len(frames)):
+        for j in range(1, len(frames[i])):
+            zcc[i] += abs(np.sign(frames[i][j]) - np.sign(frames[i][j-1]))
 
     zcc /= 2
     if display:
-        time = np.arange(0, frame_num) * (window_length / framerate)
+        time = np.arange(0, len(frames)) * (window_length / framerate)
         plt.plot(time, zcc)
         plt.title("Zero Crossing Count")
         plt.ylabel("Zero Crossing Count")

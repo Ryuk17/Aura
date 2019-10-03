@@ -30,12 +30,17 @@ def enframe(samples, overlapping=0, window_length=240, window_type='Rectangle'):
     :param window_type:
     :return: enframed frames
     """
-    frame_num = len(samples) // window_length
-    frames = np.zeros([frame_num, window_length])
-    for i in range(frame_num):
-        frames[i] = windows(samples[i*window_length:(i+1)*window_length], type=window_type)
 
-    return frames
+    frames = []
+    i = window_length
+    while i < len(samples):
+        if i + window_length < len(samples):
+            frames.append(windows(samples[i:i+window_length], type=window_type))
+            i += window_length - overlapping
+        else:
+            frames.append(windows(samples[i:], type=window_type))
+
+    return np.array(frames)
 
 def preEmphasis(samples, params, alpha=0.9375, overlapping=0, window_length=240, window_type='Rectangle', display=True):
     """
