@@ -58,6 +58,8 @@ def shortZcc(samples, params, normalize=False, overlapping=0, window_length=240,
     :param display: whether to display short energy
     :return: short zero crossing count
     """
+    nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
+
     if normalize:
         samples = normalization(samples)
 

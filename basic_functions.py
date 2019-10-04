@@ -65,7 +65,6 @@ def preEmphasis(samples, params, alpha=0.9375, overlapping=0, window_length=240,
     :param display: whether to display processed speech
     :return: processed speech
     """
-
     # get basic information
     nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
 
