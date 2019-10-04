@@ -8,6 +8,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from scipy import special
 
 
@@ -39,6 +40,7 @@ def enframe(samples, overlapping=0, window_length=240, window_type='Rectangle'):
             i += window_length - overlapping
         else:
             frames.append(windows(samples[i:], type=window_type))
+            break
 
     return np.array(frames)
 
