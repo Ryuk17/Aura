@@ -18,7 +18,7 @@ def normalization(data):
     :param data: input data
     :return: normalized data
     """
-    normalized_data = ((data - min(data)) / (max(data) - min(data)) - 0.5) * 2
+    normalized_data = 2 * (data - min(data)) / (max(data) - min(data)) - 1
     return normalized_data
 
 def getParams(param):

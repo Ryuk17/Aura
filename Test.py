@@ -18,7 +18,7 @@ nchannels, sampwidth, framerate, nframes, comptype, compname = sample.getparams(
 str_data = sample.readframes(nframes)
 wave_data = np.fromstring(str_data, dtype=np.short)
 
-y = shortAverageMagnitudeDifference(wave_data, params)
+y = estimatePitch(wave_data, params)
 
 # time = np.arange(0, nframes) * (1.0 / framerate)
 # plt.plot(time, wave_data)

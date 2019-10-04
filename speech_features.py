@@ -117,7 +117,7 @@ def Spectogram(samples, params, normalize=False, fft_points=None, overlapping=0,
     return spectogram
 
 
-def shortCorrelation(samples, params, normalize=False, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def shortCorrelation(samples, params, normalize=True, overlapping=0, window_length=240, window_type='Rectangle', display=True):
     """
     calculate the short correlation of a given speech sample
     :param samples: speech samples
