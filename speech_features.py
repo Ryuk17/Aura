@@ -2,18 +2,19 @@
 @ Filename:       speech_features.py
 @ Author:         Danc1elion
 @ Create Date:    2019-10-01   
-@ Update Date:    2019-10-01 
+@ Update Date:    2019-10-04
 @ Description:    Implement speech_features
 """
 
 from basic_functions import *
 
 
-def shortEnergy(samples, params, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def shortEnergy(samples, params, normalize=False, overlapping=0, window_length=240, window_type='Rectangle', display=True):
     """
     calculate the short energy of a given sample
     :param samples: sample data
     :param param: speech parameters
+    :param normalize: whether to normalize data
     :param overlapping: overlapping length
     :param window_length: the length of window
     :param window_type: the type of window
@@ -22,6 +23,9 @@ def shortEnergy(samples, params, overlapping=0, window_length=240, window_type='
     """
     # get basic information
     nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
+
+    if normalize:
+        samples = normalization(samples)
 
     # enframe
     frames = enframe(samples, overlapping=overlapping, window_length=window_length, window_type=window_type)
@@ -42,17 +46,22 @@ def shortEnergy(samples, params, overlapping=0, window_length=240, window_type='
     return energy
 
 
-def shortZcc(samples, params, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def shortZcc(samples, params, normalize=False, overlapping=0, window_length=240, window_type='Rectangle', display=True):
     """
     calculate the short count of a given sample
     :param samples: sample data
     :param param: speech parameters
+    :param normalize: whether to normalize data
     :param overlapping: overlapping length
     :param window_length: the length of window
     :param window_type: the type of window
     :param display: whether to display short energy
     :return: short zero crossing count
     """
+    nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
+
+    if normalize:
+        samples = normalization(samples)
 
     frames = enframe(samples, overlapping=overlapping, window_length=window_length, window_type=window_type)
     zcc = np.zeros(len(frames))
@@ -73,11 +82,12 @@ def shortZcc(samples, params, overlapping=0, window_length=240, window_type='Rec
     return zcc
 
 
-def Spectogram(samples, params, fft_points=None, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def Spectogram(samples, params, normalize=False, fft_points=None, overlapping=0, window_length=240, window_type='Rectangle', display=True):
     """
     calculate the spectogram of samples
     :param samples: speech samples
     :param params: speech parameters
+    :param normalize: whether to normalize data
     :param fft_points: fft_points
     :param overlapping: overlapping length
     :param window_length: window length
@@ -85,6 +95,9 @@ def Spectogram(samples, params, fft_points=None, overlapping=0, window_length=24
     :param display: whether to display spectogram
     :return: spectogram
     """
+    if normalize:
+        samples = normalization(samples)
+
     time_signal = preEmphasis(samples, params, display=False)
     frames = enframe(time_signal, overlapping=overlapping, window_length=window_length, window_type=window_type)
     spectogram = []
@@ -106,17 +119,21 @@ def Spectogram(samples, params, fft_points=None, overlapping=0, window_length=24
     return spectogram
 
 
-def shortCorrelation(samples, params, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def shortCorrelation(samples, params, normalize=True, overlapping=0, window_length=240, window_type='Rectangle', display=True):
     """
     calculate the short correlation of a given speech sample
     :param samples: speech samples
     :param params: speech parameters
+    :param normalize: whether to normalize data
     :param overlapping: overlapping length
     :param window_length: window length
     :param window_type: window type
     :param display: whether to display correlation
-    :return: correlation
+    :return: correlation of each frame
     """
+    if normalize:
+        samples = normalization(samples)
+
     frames = enframe(samples, overlapping=overlapping, window_length=window_length, window_type=window_type)
     correlation = np.zeros(shape=frames.shape)
 
@@ -125,9 +142,9 @@ def shortCorrelation(samples, params, overlapping=0, window_length=240, window_t
             correlation[:, k] += frames[:, i] * frames[:, i + k]
 
     if display:
-        time = np.arange(0, len(frames[0]))
-        plt.plot(time, correlation[0])
-        plt.title("First Frame Correlation")
+        time = np.arange(0, len(frames[100]))
+        plt.plot(time, correlation[100])
+        plt.title("100th Frame Correlation")
         plt.ylabel("Correlation")
         plt.xlabel("Delay")
         plt.show()
@@ -135,4 +152,108 @@ def shortCorrelation(samples, params, overlapping=0, window_length=240, window_t
     return correlation
 
 
+def shortAverageMagnitudeDifference(samples, params, normalize=True, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+    """
+    calculate the average magnitude difference of a given speech sample
+    :param samples: speech samples
+    :param params: speech parameters
+    :param normalize: whether to normalize data
+    :param overlapping: overlapping length
+    :param window_length: window length
+    :param window_type: window type
+    :param display: whether to display average magnitude difference
+    :return: average magnitude difference of each frame
+    """
+    if normalize:
+        samples = normalization(samples)
 
+    frames = enframe(samples, overlapping=overlapping, window_length=window_length, window_type=window_type)
+    difference = np.zeros(shape=frames.shape)
+
+    for k in range(1, len(frames[0])):
+        for i in range(len(frames[0]) - k):
+            difference[:, k] += abs(frames[:, i] - frames[:, i + k])
+
+    for n in range(len(frames)):
+        difference[n] /= abs(np.average(frames[n]))
+
+    if display:
+        time = np.arange(0, len(frames[100]))
+        plt.plot(time, difference[100])
+        plt.title("100th Frame Average Magnitude Difference")
+        plt.ylabel("Average Magnitude Difference")
+        plt.xlabel("Delay")
+        plt.show()
+
+    return difference
+
+def estimatePitch(samples, params, normalize=False, method='Correlation', smooth='None', L=2, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+    """
+    estimate pitch
+    :param samples: speech samples
+    :param params: speech parameters
+    :param normalize: whether to normalize data
+    :param method: estimation method
+    :param smooth: smooth method
+    :param L: smooth window length
+    :param overlapping: overlapping length
+    :param window_length: indow length
+    :param window_type: window type
+    :param display:whether to display pitch
+    :return: pitch
+    """
+    if normalize:
+        samples = normalization(samples)
+
+    nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
+    if method == 'Correlation':
+        correlation = shortCorrelation(samples, params, overlapping=overlapping, window_length=window_length, window_type=window_type,display=False)
+        pitch = np.zeros(len(correlation))
+        for i in range(len(correlation)):
+            index = np.argmax(correlation[i][30:]) + 1
+            pitch[i] = framerate / index
+    elif method == 'AMDF':
+        AMDF = shortAverageMagnitudeDifference(samples, params, overlapping=overlapping, window_length=window_length, window_type=window_type,display=False)
+        pitch = np.zeros(len(AMDF))
+        for i in range(len(AMDF)):
+            index = np.argmin(AMDF[i][30:])
+            pitch[i] = framerate / index
+    else:
+        raise NameError('Unrecongnized estimate method')
+
+    if smooth == 'median':
+        smoothed_pitch = np.zeros(len(pitch))
+        for i in range(len(pitch)):
+            if i < L:
+                window = pitch[ : L]
+            elif i == len(pitch) - 1:
+                window = pitch[-L:]
+            else:
+                window = pitch[i - L : i + L + 1]
+            window = np.sort(window)
+            smoothed_pitch[i] = window[L // 2]
+    elif smooth == 'linear':
+        smoothed_pitch = np.zeros(len(pitch))
+        mask = 1 / (2 * L + 1)
+        for i in range(len(pitch)):
+            if i < L:
+                window = pitch[: L] * mask
+            elif i == len(pitch) - 1:
+                window = pitch[-L:] * mask
+            else:
+                window = pitch[i - L: i + L + 1] * mask
+            smoothed_pitch[i] = np.sum(window)
+    elif smooth == 'None':
+        smoothed_pitch = pitch
+    else:
+        raise NameError('Unrecongnized smooth method')
+
+    if display:
+        time = np.arange(0, len(smoothed_pitch))
+        plt.scatter(time, smoothed_pitch)
+        plt.title("Pitch")
+        plt.ylabel("Frequency")
+        plt.xlabel("Frames")
+        plt.show()
+
+    return smoothed_pitch
