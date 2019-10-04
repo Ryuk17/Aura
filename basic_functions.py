@@ -12,6 +12,15 @@ import seaborn as sns
 from scipy import special
 
 
+def normalization(data):
+    """
+    normalize data into [-1, 1]
+    :param data: input data
+    :return: normalized data
+    """
+    normalized_data = ((data - min(data)) / (max(data) - min(data)) - 0.5) * 2
+    return normalized_data
+
 def getParams(param):
     """
     unpack paramters
