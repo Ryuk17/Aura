@@ -4,6 +4,7 @@ This repository is about Speech processing, Speech ehancement, Speech separation
 
 ### What's in it
 1. [basic_functions](https://github.com/DandelionLau/Ryuk/blob/master/base_functions.py): basic function for speech signal processing, including  
+    + **normalization()**: normalize data into [-1, 1]
     + **getParams()**: unpack the speech parameter
     + **enframe()**: split speech into frames
     + **preEmphasis()**: pre emphasis speech
@@ -15,3 +16,4 @@ This repository is about Speech processing, Speech ehancement, Speech separation
     + **shortCorrelation()**: calculate the short correlation of a given speech sample
     + **shortAverageMagnitudeDifference()**: calculate the short average magnitude difference of a given speech sample
     + **Spectogram()**: calculate the spectogram of a given speech sample
+    + **estimatePitch()**: estimate pitch of each frame  
