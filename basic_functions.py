@@ -2,7 +2,7 @@
 @ Filename:       basic_functions.py
 @ Author:         Danc1elion
 @ Create Date:    2019-10-03   
-@ Update Date:    2019-10-03 
+@ Update Date:    2019-10-04
 @ Description:    Implement basic_functions
 """
 
@@ -11,6 +11,15 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import special
 
+
+def normalization(data):
+    """
+    normalize data into [-1, 1]
+    :param data: input data
+    :return: normalized data
+    """
+    normalized_data = 2 * (data - min(data)) / (max(data) - min(data)) - 1
+    return normalized_data
 
 def getParams(param):
     """
@@ -56,7 +65,6 @@ def preEmphasis(samples, params, alpha=0.9375, overlapping=0, window_length=240,
     :param display: whether to display processed speech
     :return: processed speech
     """
-
     # get basic information
     nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
 
