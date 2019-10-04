@@ -2,7 +2,7 @@
 @ Filename:       speech_features.py
 @ Author:         Danc1elion
 @ Create Date:    2019-10-01   
-@ Update Date:    2019-10-01 
+@ Update Date:    2019-10-04
 @ Description:    Implement speech_features
 """
 
