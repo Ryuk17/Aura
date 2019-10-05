@@ -257,3 +257,7 @@ def estimatePitch(samples, params, normalize=False, method='Correlation', smooth
         plt.show()
 
     return smoothed_pitch
+
+
+def MFCC(samples, params, normalize=True, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+    pass
