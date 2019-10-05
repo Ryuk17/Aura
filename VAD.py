@@ -8,4 +8,10 @@
 
 from basic_functions import *
 from speech_features import *
+import wave
+import os
+import natsort
 
+# create dataset
+wav_files = natsort.natsorted(os.listdir('./dataset/wav'))
+vad_files = natsort.natsorted(os.listdir('./dataset/vad'))
