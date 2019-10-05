@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import special
-
+from scipy.fftpack import dct
 
 def normalization(data):
     """
@@ -31,10 +31,11 @@ def getParams(param):
     return nchannels, sampwidth, framerate, nframes, comptype, compname
 
 
-def enframe(samples, overlapping=0, window_length=240, window_type='Rectangle'):
+def enframe(samples, param, overlapping=0, window_length=240, window_type='Rectangle'):
     """
     divede samples into frame
     :param samples:
+    :param param: speech paramters
     :param frame_num:
     :param window_length:
     :param window_type:
@@ -42,13 +43,15 @@ def enframe(samples, overlapping=0, window_length=240, window_type='Rectangle'):
     """
 
     frames = []
-    i = window_length
-    while i < len(samples):
+    i = 0
+    k = 0
+    while k < len(samples):
         if i + window_length < len(samples):
-            frames.append(windows(samples[i:i+window_length], type=window_type))
+            frames.append(samples[i:i+window_length])
+            k += 1
             i += window_length - overlapping
         else:
-            frames.append(windows(samples[i:], type=window_type))
+            frames.append(samples[i:])
             break
 
     return np.array(frames)

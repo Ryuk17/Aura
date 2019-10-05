@@ -16,9 +16,10 @@ sample = wave.open('./dataset/wav/1.wav')
 params = list(sample.getparams())
 nchannels, sampwidth, framerate, nframes, comptype, compname = sample.getparams()
 str_data = sample.readframes(nframes)
+sample.close()
 wave_data = np.fromstring(str_data, dtype=np.short)
 
-y = estimatePitch(wave_data, params)
+y = extractMFCC(wave_data, params)
 
 # time = np.arange(0, nframes) * (1.0 / framerate)
 # plt.plot(time, wave_data)

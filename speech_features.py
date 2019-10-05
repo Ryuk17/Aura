@@ -7,7 +7,7 @@
 """
 
 from basic_functions import *
-
+from matplotlib.ticker import FuncFormatter
 
 def shortEnergy(samples, params, normalize=False, overlapping=0, window_length=240, window_type='Rectangle', display=True):
     """
@@ -259,5 +259,68 @@ def estimatePitch(samples, params, normalize=False, method='Correlation', smooth
     return smoothed_pitch
 
 
-def MFCC(samples, params, normalize=True, overlapping=0, window_length=240, window_type='Rectangle', display=True):
-    pass
+def extractMFCC(samples, params, normalize=False, fft_points=256, Mel_filters=40, Mel_cofficients=12, overlapping=80, window_length=240, window_type='Hamming', display=True):
+    """
+    extract MFCC from speech
+    :param samples: speech sample
+    :param params: speech parameters
+    :param normalize: whether to normalize speech
+    :param fft_points: fft points
+    :param Mel_filters: the number of Mel filters
+    :param Mel_cofficients: the number of Mel cofficients
+    :param overlapping: overlapping length
+    :param window_length: frame length
+    :param window_type: window type
+    :param display: whether to display
+    :return: MFCC
+    """
+    nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
+    if normalize:
+        samples = normalization(samples)
+
+    # pre emphasis
+    samples = preEmphasis(samples, params, display=False)
+
+    # enframe
+    frames = enframe(samples, params, overlapping=overlapping, window_length=window_length, window_type=window_type)
+
+    # fft
+    spectrum = np.fft.fft(frames, fft_points)
+    power = np.abs(spectrum)[:,0: fft_points // 2 + 1]
+
+    # transfer frequency into Mel-frequency
+    low_freq_mel = 0
+    high_freq_mel = (2595 * np.log10(1 + (framerate) / 700))
+    mel_points = np.linspace(low_freq_mel, high_freq_mel, Mel_filters + 2)
+    hz_points = (700 * (10 ** (mel_points / 2595) - 1))
+
+    bin = np.floor((fft_points // 2 + 1) * hz_points / framerate)
+
+    fbank = np.zeros((Mel_filters, int(np.floor(fft_points // 2 + 1))))
+
+    for m in range(1, Mel_filters + 1):
+        low = int(bin[m - 1])
+        center = int(bin[m])
+        high = int(bin[m + 1])
+        for k in range(low, center):
+            fbank[m - 1, k] = (k - low) / (center - low)
+        for k in range(center, high):
+            fbank[m - 1, k] = (high - k) / (high - center)
+
+    filter_banks = np.dot(power, fbank.T)
+    filter_banks = np.where(filter_banks == 0, np.finfo(float).eps, filter_banks)
+    filter_banks = 20 * np.log10(filter_banks).clip(1e-5,np.inf)
+
+    mfcc = dct(filter_banks, type=2, axis=1, norm='ortho')[:, 1: (Mel_cofficients + 1)]
+
+    if display:
+        plt.imshow(mfcc.T, cmap='jet', origin='lower')
+        plt.axis('auto')
+        # plt.colorbar(cax=None, ax=None, shrink=0.2)
+        plt.title("Mel Frequency Cepstrum Coefficient")
+        plt.ylabel("MFCC")
+        plt.xlabel("Frames")
+        plt.show()
+
+    return mfcc
+
