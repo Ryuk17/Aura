@@ -22,4 +22,4 @@ This repository is about Speech processing, Speech ehancement, Speech separation
     + **Spectogram()**: calculate the spectogram of a given speech sample
 
 3. [SpeechFingerprinting](https://github.com/DandelionLau/Ryuk/blob/master/SpeechFingerprinting.py)
-4. [VAD](https://github.com/DandelionLau/Ryuk/blob/master/VAD.py)
+4. [VAD](https://github.com/DandelionLau/Ryuk/blob/master/VAD.py)：Voice activity detection method
