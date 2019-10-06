@@ -17,4 +17,7 @@ This repository is about Speech processing, Speech ehancement, Speech separation
     + **shortCorrelation()**: calculate the short correlation of a given speech sample
     + **shortAverageMagnitudeDifference()**: calculate the short average magnitude difference of a given speech sample
     + **Spectogram()**: calculate the spectogram of a given speech sample
-    + **estimatePitch()**: estimate pitch of each frame  
+    + **estimatePitch()**: estimate pitch of each frame
+    + **extractMFCC()**: extract MFCCs of each frame    
+3. [SpeechFingerprinting](https://github.com/DandelionLau/Ryuk/blob/master/SpeechFingerprinting.py)
+4. [VAD](https://github.com/DandelionLau/Ryuk/blob/master/VAD.py)
