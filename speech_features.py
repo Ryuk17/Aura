@@ -9,7 +9,7 @@
 from basic_functions import *
 from matplotlib.ticker import FuncFormatter
 
-def shortEnergy(samples, params, normalize=False, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def shortEnergy(samples, params, normalize=False, overlapping=0, window_length=240, window_type='Rectangle', display=False):
     """
     calculate the short energy of a given sample
     :param samples: sample data
@@ -28,8 +28,8 @@ def shortEnergy(samples, params, normalize=False, overlapping=0, window_length=2
         samples = normalization(samples)
 
     # enframe
-    frames = enframe(samples, overlapping=overlapping, window_length=window_length, window_type=window_type)
-    energy = np.zeros(len(frames))
+    frames = enframe(samples, params, overlapping=overlapping, window_length=window_length, window_type=window_type)
+    energy = np.zeros([len(frames), 1])
 
     # calculate the short energy
     for i in range(len(frames)):
@@ -46,7 +46,7 @@ def shortEnergy(samples, params, normalize=False, overlapping=0, window_length=2
     return energy
 
 
-def shortZcc(samples, params, normalize=False, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def shortZcc(samples, params, normalize=False, overlapping=0, window_length=240, window_type='Rectangle', display=False):
     """
     calculate the short count of a given sample
     :param samples: sample data
@@ -63,8 +63,8 @@ def shortZcc(samples, params, normalize=False, overlapping=0, window_length=240,
     if normalize:
         samples = normalization(samples)
 
-    frames = enframe(samples, overlapping=overlapping, window_length=window_length, window_type=window_type)
-    zcc = np.zeros(len(frames))
+    frames = enframe(samples, params, overlapping=overlapping, window_length=window_length, window_type=window_type)
+    zcc = np.zeros([len(frames), 1])
 
     for i in range(len(frames)):
         for j in range(1, len(frames[i])):
@@ -82,7 +82,7 @@ def shortZcc(samples, params, normalize=False, overlapping=0, window_length=240,
     return zcc
 
 
-def Spectogram(samples, params, normalize=False, fft_points=None, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def Spectogram(samples, params, normalize=False, fft_points=None, overlapping=0, window_length=240, window_type='Rectangle', display=False):
     """
     calculate the spectogram of samples
     :param samples: speech samples
@@ -99,7 +99,7 @@ def Spectogram(samples, params, normalize=False, fft_points=None, overlapping=0,
         samples = normalization(samples)
 
     time_signal = preEmphasis(samples, params, display=False)
-    frames = enframe(time_signal, overlapping=overlapping, window_length=window_length, window_type=window_type)
+    frames = enframe(time_signal, params, overlapping=overlapping, window_length=window_length, window_type=window_type)
     spectogram = []
     for i in range(len(frames)):
         Y = np.fft.fft(frames[i], n=fft_points)
@@ -119,7 +119,7 @@ def Spectogram(samples, params, normalize=False, fft_points=None, overlapping=0,
     return spectogram
 
 
-def shortCorrelation(samples, params, normalize=True, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def shortCorrelation(samples, params, normalize=True, overlapping=0, window_length=240, window_type='Rectangle', display=False):
     """
     calculate the short correlation of a given speech sample
     :param samples: speech samples
@@ -134,7 +134,7 @@ def shortCorrelation(samples, params, normalize=True, overlapping=0, window_leng
     if normalize:
         samples = normalization(samples)
 
-    frames = enframe(samples, overlapping=overlapping, window_length=window_length, window_type=window_type)
+    frames = enframe(samples, params, overlapping=overlapping, window_length=window_length, window_type=window_type)
     correlation = np.zeros(shape=frames.shape)
 
     for k in range(len(frames[0])):
@@ -142,17 +142,17 @@ def shortCorrelation(samples, params, normalize=True, overlapping=0, window_leng
             correlation[:, k] += frames[:, i] * frames[:, i + k]
 
     if display:
-        time = np.arange(0, len(frames[100]))
-        plt.plot(time, correlation[100])
-        plt.title("100th Frame Correlation")
-        plt.ylabel("Correlation")
-        plt.xlabel("Delay")
+        plt.imshow(correlation.T, interpolation='bilinear', cmap='jet', origin='lower')
+        plt.colorbar(cax=None, ax=None, shrink=0.8)
+        plt.title("Correlogram")
+        plt.ylabel("Delay")
+        plt.xlabel("Frames")
         plt.show()
 
     return correlation
 
 
-def shortAverageMagnitudeDifference(samples, params, normalize=True, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def shortAverageMagnitudeDifference(samples, params, normalize=True, overlapping=0, window_length=240, window_type='Rectangle', display=False):
     """
     calculate the average magnitude difference of a given speech sample
     :param samples: speech samples
@@ -167,7 +167,7 @@ def shortAverageMagnitudeDifference(samples, params, normalize=True, overlapping
     if normalize:
         samples = normalization(samples)
 
-    frames = enframe(samples, overlapping=overlapping, window_length=window_length, window_type=window_type)
+    frames = enframe(samples, params, overlapping=overlapping, window_length=window_length, window_type=window_type)
     difference = np.zeros(shape=frames.shape)
 
     for k in range(1, len(frames[0])):
@@ -187,7 +187,7 @@ def shortAverageMagnitudeDifference(samples, params, normalize=True, overlapping
 
     return difference
 
-def estimatePitch(samples, params, normalize=False, method='Correlation', smooth='None', L=2, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def estimatePitch(samples, params, normalize=False, method='Correlation', smooth='None', L=2, overlapping=0, window_length=240, window_type='Rectangle', display=False):
     """
     estimate pitch
     :param samples: speech samples
@@ -259,7 +259,7 @@ def estimatePitch(samples, params, normalize=False, method='Correlation', smooth
     return smoothed_pitch
 
 
-def extractMFCC(samples, params, normalize=False, fft_points=256, Mel_filters=40, Mel_cofficients=12, overlapping=80, window_length=240, window_type='Hamming', display=True):
+def extractMFCC(samples, params, normalize=False, fft_points=256, Mel_filters=40, Mel_cofficients=12, overlapping=0, window_length=240, window_type='Hamming', display=False):
     """
     extract MFCC from speech
     :param samples: speech sample
@@ -284,17 +284,18 @@ def extractMFCC(samples, params, normalize=False, fft_points=256, Mel_filters=40
     # enframe
     frames = enframe(samples, params, overlapping=overlapping, window_length=window_length, window_type=window_type)
 
-    # fft
+    # fft and power spectrum
     spectrum = np.fft.fft(frames, fft_points)
     power = np.abs(spectrum)[:,0: fft_points // 2 + 1]
+    power = power ** 2 / fft_points
 
     # transfer frequency into Mel-frequency
-    low_freq_mel = 0
-    high_freq_mel = (2595 * np.log10(1 + (framerate) / 700))
-    mel_points = np.linspace(low_freq_mel, high_freq_mel, Mel_filters + 2)
-    hz_points = (700 * (10 ** (mel_points / 2595) - 1))
+    low_freq = 0
+    high_freq = 2595 * np.log10(1 + framerate / 700)
+    mel_freq = np.linspace(low_freq, high_freq, Mel_filters + 2)
+    hz_freq = (700 * (10 ** (mel_freq / 2595) - 1))
 
-    bin = np.floor((fft_points // 2 + 1) * hz_points / framerate)
+    bin = np.floor((fft_points // 2 + 1) * hz_freq / framerate)
 
     fbank = np.zeros((Mel_filters, int(np.floor(fft_points // 2 + 1))))
 
@@ -309,14 +310,15 @@ def extractMFCC(samples, params, normalize=False, fft_points=256, Mel_filters=40
 
     filter_banks = np.dot(power, fbank.T)
     filter_banks = np.where(filter_banks == 0, np.finfo(float).eps, filter_banks)
-    filter_banks = 20 * np.log10(filter_banks).clip(1e-5,np.inf)
+    filter_banks = 20 * np.log10(filter_banks).clip(1e-5, np.inf)
+    filter_banks -= (np.mean(filter_banks, axis=0) + 1e-8)
 
     mfcc = dct(filter_banks, type=2, axis=1, norm='ortho')[:, 1: (Mel_cofficients + 1)]
 
     if display:
         plt.imshow(mfcc.T, cmap='jet', origin='lower')
         plt.axis('auto')
-        # plt.colorbar(cax=None, ax=None, shrink=0.2)
+        plt.colorbar(cax=None, ax=None)
         plt.title("Mel Frequency Cepstrum Coefficient")
         plt.ylabel("MFCC")
         plt.xlabel("Frames")
@@ -324,3 +326,26 @@ def extractMFCC(samples, params, normalize=False, fft_points=256, Mel_filters=40
 
     return mfcc
 
+
+def extractFrequencyBandEnergy(samples, params, normalize=False, fft_points=256, overlapping=80, window_length=240, window_type='Hamming', display=False):
+    pass
+
+
+def PLP():
+    pass
+
+
+def GFCC():
+    pass
+
+
+def GF():
+    pass
+
+
+def AMS():
+    pass
+
+
+def MRCG():
+    pass

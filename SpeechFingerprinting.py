@@ -12,8 +12,10 @@ from scipy import special
 from basic_functions import *
 from  speech_features import *
 
-def FBEFingerprinting():
+
+def FrequencyBandEnergyFingerprinting():
     pass
+
 
 def landmarksFingerprinting():
     pass

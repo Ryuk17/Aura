@@ -8,37 +8,45 @@
 
 from basic_functions import *
 from speech_features import *
-import wave
-import tensorflow as tf
-import os
-import natsort
+import xgboost as xgb
+from matplotlib.collections import LineCollection
+from matplotlib.colors import ListedColormap, BoundaryNorm
 
-# create dataset
-wav_files = natsort.natsorted(os.listdir('./dataset/wav'))
-vad_files = natsort.natsorted(os.listdir('./dataset/vad'))
+class VADetector():
+    def __init__(self, samples, params, normalize=False, overlapping=0, window_length=240, window_type='Rectangle'):
+        self.samples = samples
+        self.params = params
+        self.normalize = normalize
+        self.overlapping = overlapping
+        self.window_length = window_length
+        self.window_type = window_type
+        self.vad = self.VADetect()
 
-frame_length = 240
-frame_num = 333
-data = np.zeros([frame_num * len(wav_files), frame_length])
-for i in range(len(wav_files)):
-    sample = wave.open('./dataset/wav/' + wav_files[i])
-    params = list(sample.getparams())
-    nchannels, sampwidth, framerate, nframes, comptype, compname = sample.getparams()
-    str_data = sample.readframes(nframes)
-    sample.close()
-    wave_data = np.fromstring(str_data, dtype=np.short)
-    frames = enframe(wave_data)
-    data[i*frame_num:(i+1)*frame_num,:] = frames
+    def VADetect(self):
+        energy = shortEnergy(self.samples, self.params)
+        zcc = shortZcc(self.samples, self.params)
+        mfcc = extractMFCC(self.samples, self.params)
+        correlation = shortCorrelation(self.samples, self.params)
+        sample_feature = np.hstack((energy, zcc, mfcc, correlation))
 
-label = np.zeros([frame_num * len(wav_files)])
-for i in range(len(vad_files)):
-    f = open('./dataset/vad/' + vad_files[i])
-    vad = [int(val) for val in list(f.read())]
-    label[i*frame_num:(i+1)*frame_num] = vad
+        clf = xgb.Booster(model_file='./models/VAD.model')
+        sample_feature = xgb.DMatrix(sample_feature)
+        vad = clf.predict(sample_feature)
+        vad = [0 if val < 0.5 else 1 for val in vad]
+        return vad
 
-# extract feature
+    def display(self):
+        frames = enframe(self.samples, self.params, overlapping=self.overlapping, window_length=self.window_length, window_type=self.window_type)
+        nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(self.params)
 
-
+        time = np.arange(0, nframes) * (1.0 / framerate)
+        for i in range(len(frames)):
+            x = time[i*self.window_length:(i+1)*self.window_length]
+            if self.vad[i] == 0:
+                plt.plot(x, frames[i], color='blue')
+            else:
+                plt.plot(x, frames[i], color='red')
+        plt.show()
 
 
 
