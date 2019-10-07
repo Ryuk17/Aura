@@ -23,3 +23,10 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
 
 3. [SpeechFingerprinting](https://github.com/DandelionLau/Ryuk/blob/master/SpeechFingerprinting.py)
 4. [VAD](https://github.com/DandelionLau/Ryuk/blob/master/VAD.py)：Voice activity detection method
+
+### Dependences
+1. Install [Python 3.6](https://www.python.org/)
+2. Install [NumPy](http://www.numpy.org/)
+2. Install [Scikit-learn](https://scikit-learn.org/)
+
+### Usage
