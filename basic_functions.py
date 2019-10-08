@@ -103,42 +103,6 @@ def preEmphasis(samples, fs, alpha=0.9375, overlapping=0, window_length=240, win
     return y
 
 
-def windows(samples, beta=8.5, window_type='Rectangle'):
-    """
-    calculate the output of different windows
-    :param samples: samples
-    :param beta: parameter for kaiser window
-    :param type: window type
-    :return: data after windowed
-    """
-    N = len(samples)
-    data = samples
-    x = np.linspace(0, N - 1, N, dtype=np.int64)
-    if window_type == 'Rectangle':
-        data = samples
-    elif window_type == 'Triangle':
-        for i in range(N):
-            if i < N:
-                data[i] = 2 * i / (N - 1)
-            else:
-                data[i] = 2 - 2 * i / (N - 1)
-    elif window_type == 'Hamming':
-        w = 0.54 - 0.46 * np.cos(2 * np.pi * x / (N - 1))
-        data = data * w
-    elif window_type == 'Hanning':
-        w = 0.5 * (1 - np.cos(2 * np.pi * x / (N - 1)))
-        data = data * w
-    elif window_type == 'Blackman':
-        w = 0.42 - 0.5 * (1 - np.cos(2 * np.pi * x / (N - 1))) + 0.08 * np.cos(4 * np.pi * x / (N - 1))
-        data = data * w
-    elif window_type == 'Kaiser':
-        w = special.j0(beta * np.sqrt(1 - np.square(1 - 2 * x /(N - 1)))) / special.j0(beta)
-        data = data * w
-    else:
-        raise NameError('Unrecongnized window type')
-    return data
-
-
 def displaySpeech(samples, fs):
     """
     display waveform of a given speech sample

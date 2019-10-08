@@ -323,6 +323,59 @@ def extractMFCC(samples, fs, normalize=False, fft_points=256, Mel_filters=40, Me
     return mfcc
 
 
+def extractBFCC(samples, fs, normalize=False, fft_points=256, Bark_filters=40, Bark_cofficients=12, overlapping=0, window_length=240, window_type='Hamming', display=False):
+    if normalize:
+        samples = normalization(samples)
+
+    # pre emphasis
+    samples = preEmphasis(samples, fs, display=False)
+
+    # enframe
+    frames = enframe(samples, fs, overlapping=overlapping, window_length=window_length, window_type=window_type)
+
+    # fft and power spectrum
+    spectrum = np.fft.fft(frames, fft_points)
+    power = np.abs(spectrum)[:,0: fft_points // 2 + 1]
+    power = power ** 2 / fft_points
+
+    # transfer frequency into Mel-frequency
+    low_freq = 20
+    high_freq = 2595 * np.log10(1 + fs / 700)
+    mel_freq = np.linspace(low_freq, high_freq, Bark_filters + 2)
+    hz_freq = (700 * (10 ** (mel_freq / 2595) - 1))
+
+    bin = np.floor((fft_points // 2 + 1) * hz_freq / fs)
+
+    fbank = np.zeros((Bark_filters, int(np.floor(fft_points // 2 + 1))))
+
+    for m in range(1, Bark_filters + 1):
+        low = int(bin[m - 1])
+        center = int(bin[m])
+        high = int(bin[m + 1])
+        for k in range(low, center):
+            fbank[m - 1, k] = (k - low) / (center - low)
+        for k in range(center, high):
+            fbank[m - 1, k] = (high - k) / (high - center)
+
+    filter_banks = np.dot(power, fbank.T)
+    filter_banks = np.where(filter_banks == 0, np.finfo(float).eps, filter_banks)
+    filter_banks = 20 * np.log10(filter_banks).clip(1e-5, np.inf)
+    filter_banks -= (np.mean(filter_banks, axis=0) + 1e-8)
+
+    mfcc = dct(filter_banks, type=2, axis=1, norm='ortho')[:, 1: (Bark_cofficients + 1)]
+
+    if display:
+        plt.imshow(mfcc.T, cmap='jet', origin='lower')
+        plt.axis('auto')
+        plt.colorbar(cax=None, ax=None)
+        plt.title("Bark Frequency Cepstrum Coefficient")
+        plt.ylabel("BFCC")
+        plt.xlabel("Frames")
+        plt.show()
+
+    return mfcc
+
+
 def extractFrequencyBandEnergy(samples, fs, normalize=False, fft_points=256, overlapping=80, window_length=240, window_type='Hamming', display=False):
     pass
 

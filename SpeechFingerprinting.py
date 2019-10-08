@@ -13,8 +13,10 @@ from basic_functions import *
 from  speech_features import *
 
 
-def FrequencyBandEnergyFingerprinting():
-    pass
+def FrequencyBandEnergyFingerprinting(samples, fs, overlapping=0, window_length=240, window_type='Rectangle'):
+    samples = preEmphasis(samples, fs)
+    frames = enframe(samples, fs, overlapping=overlapping, window_length=window_length, window_type=window_type)
+
 
 
 def landmarksFingerprinting():

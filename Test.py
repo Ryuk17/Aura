@@ -10,18 +10,22 @@ import wave
 from speech_features import *
 import matplotlib.pyplot as plt
 import numpy as np
+from VAD import VADetector
+from sklearn.model_selection import train_test_split
+import pickle
+import tensorflow as tf
+from sklearn.preprocessing import minmax_scale,OneHotEncoder
+from tqdm import tqdm
+import scipy.io.wavfile as wav
+from scipy.fftpack import fft
 
 
-sample = wave.open('./dataset/wav/1.wav')
-params = list(sample.getparams())
-nchannels, sampwidth, framerate, nframes, comptype, compname = sample.getparams()
-str_data = sample.readframes(nframes)
-sample.close()
-wave_data = np.fromstring(str_data, dtype=np.short)
+# sample = wave.open('./dataset/wav/1.wav')
+# params = list(sample.getparams())
+# nchannels, sampwidth, framerate, nframes, comptype, compname = sample.getparams()
+# str_data = sample.readframes(nframes)
+# sample.close()
+# wave_data = np.fromstring(str_data, dtype=np.short)
+fs, wavsignal = wav.read('./dataset/wav/1.wav')
+d = Spectogram(wavsignal, fs, overlapping=80, window_type='Hamming', display=True)
 
-y = extractMFCC(wave_data, params)
-
-# time = np.arange(0, nframes) * (1.0 / framerate)
-# plt.plot(time, wave_data)
-# plt.xlabel("time (seconds)")
-# plt.show()
