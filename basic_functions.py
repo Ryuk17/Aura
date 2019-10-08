@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import special
 from scipy.fftpack import dct
+import scipy.io.wavfile as wav
+from scipy.fftpack import fft
 
 def normalization(data):
     """
@@ -21,46 +23,60 @@ def normalization(data):
     normalized_data = 2 * (data - min(data)) / (max(data) - min(data)) - 1
     return normalized_data
 
-def getParams(param):
-    """
-    unpack paramters
-    :param param: speech paramters
-    :return: nchannels, sampwidth, framerate, nframes, comptype, compname
-    """
-    nchannels, sampwidth, framerate, nframes, comptype, compname = param[0], param[1], param[2], param[3], param[4], param[5]
-    return nchannels, sampwidth, framerate, nframes, comptype, compname
 
-
-def enframe(samples, param, overlapping=0, window_length=240, window_type='Rectangle'):
+def enframe(samples, fs, beta=8.5, overlapping=0, window_length=240, window_type='Rectangle'):
     """
     divede samples into frame
     :param samples:
-    :param param: speech paramters
+    :param fs: sample frequency
     :param frame_num:
     :param window_length:
     :param window_type:
     :return: enframed frames
     """
 
-    frames = []
-    i = 0
-    k = 0
-    while k < len(samples):
-        if i + window_length < len(samples):
-            frames.append(samples[i:i+window_length])
-            k += 1
-            i += window_length - overlapping
+    frames_num = len(samples) // (window_length - overlapping)
+    frames = np.zeros([frames_num, window_length])
+    for i in range(frames_num):
+        start = i * (window_length - overlapping)
+        end = start + window_length
+        data = samples[start:end]
+
+        N = len(data)
+        x = np.linspace(0, N - 1, N, dtype=np.int64)
+
+        if window_type == 'Rectangle':
+            data = samples
+        elif window_type == 'Triangle':
+            for i in range(N):
+                if i < N:
+                    data[i] = 2 * i / (N - 1)
+                else:
+                    data[i] = 2 - 2 * i / (N - 1)
+        elif window_type == 'Hamming':
+            w = 0.54 - 0.46 * np.cos(2 * np.pi * x / (N - 1))
+            data = data * w
+        elif window_type == 'Hanning':
+            w = 0.5 * (1 - np.cos(2 * np.pi * x / (N - 1)))
+            data = data * w
+        elif window_type == 'Blackman':
+            w = 0.42 - 0.5 * (1 - np.cos(2 * np.pi * x / (N - 1))) + 0.08 * np.cos(4 * np.pi * x / (N - 1))
+            data = data * w
+        elif window_type == 'Kaiser':
+            w = special.j0(beta * np.sqrt(1 - np.square(1 - 2 * x / (N - 1)))) / special.j0(beta)
+            data = data * w
         else:
-            frames.append(samples[i:])
-            break
+            raise NameError('Unrecongnized window type')
 
-    return np.array(frames)
+        frames[i] = data
+    return frames
 
-def preEmphasis(samples, params, alpha=0.9375, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+
+def preEmphasis(samples, fs, alpha=0.9375, overlapping=0, window_length=240, window_type='Rectangle', display=True):
     """
     per emphasis speech
     :param samples: sample data
-    :param param: speech parameters
+    :param fs: sample frequency
     :param alpha: parameter
     :param overlapping: overlapping length
     :param window_length: the length of window
@@ -68,8 +84,6 @@ def preEmphasis(samples, params, alpha=0.9375, overlapping=0, window_length=240,
     :param display: whether to display processed speech
     :return: processed speech
     """
-    # get basic information
-    nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
 
     y = np.zeros(len(samples))
     y[0] = samples[0]
@@ -79,7 +93,7 @@ def preEmphasis(samples, params, alpha=0.9375, overlapping=0, window_length=240,
         y[i] = samples[i] - alpha * samples[i-1]
 
     if display:
-        time = np.arange(0, nframes) * (1.0 / framerate)
+        time = np.arange(0, len(samples)) * (1.0 / fs)
         plt.plot(time, samples)
         plt.title("Pre-emphasis")
         plt.ylabel("Waveform")
@@ -89,7 +103,7 @@ def preEmphasis(samples, params, alpha=0.9375, overlapping=0, window_length=240,
     return y
 
 
-def windows(samples, beta=8.5, type='Rectangle'):
+def windows(samples, beta=8.5, window_type='Rectangle'):
     """
     calculate the output of different windows
     :param samples: samples
@@ -99,40 +113,40 @@ def windows(samples, beta=8.5, type='Rectangle'):
     """
     N = len(samples)
     data = samples
-    if type == 'Rectangle':
+    x = np.linspace(0, N - 1, N, dtype=np.int64)
+    if window_type == 'Rectangle':
         data = samples
-    elif type == 'Triangle':
+    elif window_type == 'Triangle':
         for i in range(N):
             if i < N:
                 data[i] = 2 * i / (N - 1)
             else:
                 data[i] = 2 - 2 * i / (N - 1)
-    elif type == 'Hamming':
-        for i in range(N):
-            data[i] = 0.54 - 0.56 * np.cos(2 * np.pi * i / (N - 1))
-    elif type == 'Hanning':
-        for i in range(N):
-            data[i] = 0.5 * (1 - np.cos(2 * np.pi * i / (N - 1)))
-    elif type == 'Blackman':
-        for i in range(N):
-            data[i] = 0.42 - 0.5 * (1 - np.cos(2 * np.pi * i / (N - 1))) + 0.08 * np.cos(4 * np.pi * i / (N - 1))
-    elif type == 'Kaiser':
-        for i in range(N):
-            data[i] = special.j0(beta * np.sqrt(1 - np.square(1 - 2 * i /(N - 1)))) / special.j0(beta)
+    elif window_type == 'Hamming':
+        w = 0.54 - 0.46 * np.cos(2 * np.pi * x / (N - 1))
+        data = data * w
+    elif window_type == 'Hanning':
+        w = 0.5 * (1 - np.cos(2 * np.pi * x / (N - 1)))
+        data = data * w
+    elif window_type == 'Blackman':
+        w = 0.42 - 0.5 * (1 - np.cos(2 * np.pi * x / (N - 1))) + 0.08 * np.cos(4 * np.pi * x / (N - 1))
+        data = data * w
+    elif window_type == 'Kaiser':
+        w = special.j0(beta * np.sqrt(1 - np.square(1 - 2 * x /(N - 1)))) / special.j0(beta)
+        data = data * w
     else:
         raise NameError('Unrecongnized window type')
     return data
 
 
-def displaySpeech(samples, params):
+def displaySpeech(samples, fs):
     """
     display waveform of a given speech sample
     :param sample_name: speech sample name
-    :param params: speech parameters
+    :param fs: sample frequency
     :return:
     """
-    nchannels, sampwidth, framerate, nframes, comptype, compname = getParams(params)
-    time = np.arange(0, nframes) * (1.0 / framerate)
+    time = np.arange(0, len(samples)) * (1.0 / fs)
 
     plt.plot(time, samples)
     plt.title("Speech")
