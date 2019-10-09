@@ -3,6 +3,9 @@
 [![GPL-3.0 Licensed](https://img.shields.io/crates/l/rustc-serialize)](https://opensource.org/licenses/GPL-3.0) [![TensorFlow Version](https://img.shields.io/badge/Tensorflow-1.7+-blue.svg)](https://www.tensorflow.org/) [![Keras Version](https://img.shields.io/badge/Keras-2.0+-blue.svg)](https://keras.io/) [![Python Version](https://img.shields.io/badge/Python-3.x-blue.svg)](https://www.python.org/)  
 Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech recognition and etc.
 
+### Usage
+
+
 ### What's in it
 1. [basic_functions](https://github.com/DandelionLau/Ryuk/blob/master/base_functions.py): basic function for speech signal processing, including  
     + **displaySpeech()**: display waveform of a given speech sample
@@ -10,7 +13,6 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
     + **getParams()**: unpack the speech parameter
     + **normalization()**: normalize data into [-1, 1]
     + **preEmphasis()**: pre emphasis speech
-    + **windows()**: various window function
 
 2. [speech_features](https://github.com/DandelionLau/Ryuk/blob/master/speech_features.py): extract basic features from speech, including   
     + **estimatePitch()**: estimate pitch of each frame
@@ -29,4 +31,4 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
 2. Install [NumPy](http://www.numpy.org/)
 2. Install [Scikit-learn](https://scikit-learn.org/)
 
-### Usage
+
