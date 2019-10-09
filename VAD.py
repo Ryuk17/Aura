@@ -9,8 +9,7 @@
 from basic_functions import *
 from speech_features import *
 import xgboost as xgb
-from matplotlib.collections import LineCollection
-from matplotlib.colors import ListedColormap, BoundaryNorm
+
 
 class VADetector():
     def __init__(self, samples, params, normalize=False, overlapping=0, window_length=240, window_type='Rectangle'):
