@@ -84,7 +84,6 @@ def preEmphasis(samples, fs, alpha=0.9375, overlapping=0, window_length=240, win
     :param display: whether to display processed speech
     :return: processed speech
     """
-
     y = np.zeros(len(samples))
     y[0] = samples[0]
 

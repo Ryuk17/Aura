@@ -323,7 +323,7 @@ def extractMFCC(samples, fs, normalize=False, fft_points=256, Mel_filters=40, Me
     return mfcc
 
 
-def extractBFCC(samples, fs, normalize=False, fft_points=256, Bark_filters=40, Bark_cofficients=12, overlapping=0, window_length=240, window_type='Hamming', display=False):
+def extractBFCC(samples, fs, normalize=False, fft_points=256, Bark_filters=24, Bark_cofficients=12, overlapping=0, window_length=240, window_type='Hamming', display=False):
     if normalize:
         samples = normalization(samples)
 
@@ -339,14 +339,14 @@ def extractBFCC(samples, fs, normalize=False, fft_points=256, Bark_filters=40, B
     power = power ** 2 / fft_points
 
     # transfer frequency into Mel-frequency
-    low_freq = 20
-    high_freq = 2595 * np.log10(1 + fs / 700)
-    mel_freq = np.linspace(low_freq, high_freq, Bark_filters + 2)
-    hz_freq = (700 * (10 ** (mel_freq / 2595) - 1))
+    low_freq = 13 * np.arctan(0.76 * 20 / 1000) + 0.35 * np.arctan(np.square(20 / 7500))
+    high_freq = 13 * np.arctan(0.76 * fs / 1000) + 0.35 * np.arctan(np.square(fs / 7500))
+    bark_freq = np.linspace(low_freq, high_freq, Bark_filters + 2)
+    hz_freq = bark_freq * (np.exp(0.219 * bark_freq) + 1) - 0.032 * np.exp(-0.15 * np.square(bark_freq - 5))
 
     bin = np.floor((fft_points // 2 + 1) * hz_freq / fs)
 
-    fbank = np.zeros((Bark_filters, int(np.floor(fft_points // 2 + 1))))
+    fbank = np.zeros((Bark_filters, np.floor(fft_points // 2 + 1)))
 
     for m in range(1, Bark_filters + 1):
         low = int(bin[m - 1])
