@@ -11,6 +11,7 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
     + **displaySpeech()**: display waveform of a given speech sample
     + **enframe()**: split speech into frames
     + **normalization()**: normalize data into [-1, 1]
+    + **PESQ()**: PESQ test for speech
     + **preEmphasis()**: pre emphasis speech
 
 2. [speech_features](https://github.com/DandelionLau/Ryuk/blob/master/speech_features.py): extract basic features from speech, including   
