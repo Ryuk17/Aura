@@ -13,6 +13,7 @@ from scipy import special
 from scipy.fftpack import dct
 import scipy.io.wavfile as wav
 from scipy.fftpack import fft
+import subprocess
 
 def normalization(data):
     """
@@ -46,7 +47,7 @@ def enframe(samples, fs, beta=8.5, overlapping=0, window_length=240, window_type
         x = np.linspace(0, N - 1, N, dtype=np.int64)
 
         if window_type == 'Rectangle':
-            data = samples
+            data = data
         elif window_type == 'Triangle':
             for i in range(N):
                 if i < N:
@@ -72,7 +73,7 @@ def enframe(samples, fs, beta=8.5, overlapping=0, window_length=240, window_type
     return frames
 
 
-def preEmphasis(samples, fs, alpha=0.9375, overlapping=0, window_length=240, window_type='Rectangle', display=True):
+def preEmphasis(samples, fs, alpha=0.9375, overlapping=0, window_length=240, window_type='Rectangle', display=False):
     """
     per emphasis speech
     :param samples: sample data
@@ -115,3 +116,12 @@ def displaySpeech(samples, fs):
     plt.title("Speech")
     plt.xlabel("time (seconds)")
     plt.show()
+
+
+def pesqTest(raw_wav_path, deg_wav_path, fs):
+    pesq_exe = "./utils/PESQ/pesq.exe"
+    commad = str('+') + str(fs) + ' ' + raw_wav_path + ' ' + deg_wav_path
+    subprocess.Popen(pesq_exe + ' ' + commad)
+
+
+

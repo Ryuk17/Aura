@@ -79,7 +79,7 @@ def shortZcc(samples, fs, normalize=False, overlapping=0, window_length=240, win
     return zcc
 
 
-def Spectogram(samples, fs, normalize=False, fft_points=512, overlapping=0, window_length=240, window_type='Hamming', display=False):
+def extractSpectogram(samples, fs, normalize=False, fft_points=512, overlapping=0, window_length=240, window_type='Hamming', display=False):
     """
     calculate the spectogram of samples
     :param samples: speech samples
@@ -256,13 +256,15 @@ def estimatePitch(samples, fs, normalize=False, method='Correlation', smooth='No
     return smoothed_pitch
 
 
-def extractMFCC(samples, fs, normalize=False, fft_points=256, Mel_filters=40, Mel_cofficients=12, overlapping=0, window_length=240, window_type='Hamming', display=False):
+def extractMFCC(samples, fs, normalize=False, low_freq=0, high_freq=8000, fft_points=256, Mel_filters=40, Mel_cofficients=12, overlapping=0, window_length=240, window_type='Hamming', display=False):
     """
     extract MFCC from speech
     :param samples: speech sample
     :param fs: sample frequency
     :param normalize: whether to normalize speech
     :param fft_points: fft points
+    :param low_freq: minimum frequency
+    :param high_freq: maximum frequency
     :param Mel_filters: the number of Mel filters
     :param Mel_cofficients: the number of Mel cofficients
     :param overlapping: overlapping length
@@ -282,12 +284,12 @@ def extractMFCC(samples, fs, normalize=False, fft_points=256, Mel_filters=40, Me
 
     # fft and power spectrum
     spectrum = np.fft.fft(frames, fft_points)
-    power = np.abs(spectrum)[:,0: fft_points // 2 + 1]
+    power = np.abs(spectrum)[:, 0: fft_points // 2 + 1]
     power = power ** 2 / fft_points
 
     # transfer frequency into Mel-frequency
-    low_freq = 0
-    high_freq = 2595 * np.log10(1 + fs / 700)
+    low_freq = 2595 * np.log10(1 + low_freq / 700)
+    high_freq = min(2595 * np.log10(1 + high_freq / 700), fs / 2)
     mel_freq = np.linspace(low_freq, high_freq, Mel_filters + 2)
     hz_freq = (700 * (10 ** (mel_freq / 2595) - 1))
 
@@ -300,9 +302,9 @@ def extractMFCC(samples, fs, normalize=False, fft_points=256, Mel_filters=40, Me
         center = int(bin[m])
         high = int(bin[m + 1])
         for k in range(low, center):
-            fbank[m - 1, k] = (k - low) / (center - low)
+            fbank[m - 1, k] = (k - bin[m - 1]) / (bin[m] - bin[m - 1])
         for k in range(center, high):
-            fbank[m - 1, k] = (high - k) / (high - center)
+            fbank[m - 1, k] = (bin[m + 1] - k) / (bin[m + 1] - bin[m])
 
     filter_banks = np.dot(power, fbank.T)
     filter_banks = np.where(filter_banks == 0, np.finfo(float).eps, filter_banks)
@@ -323,7 +325,7 @@ def extractMFCC(samples, fs, normalize=False, fft_points=256, Mel_filters=40, Me
     return mfcc
 
 
-def extractBFCC(samples, fs, normalize=False, fft_points=256, Bark_filters=24, Bark_cofficients=12, overlapping=0, window_length=240, window_type='Hamming', display=False):
+def extractBFCC(samples, fs, normalize=False, low_freq=0, high_freq=8000, fft_points=256, Bark_filters=24, Bark_cofficients=12, overlapping=0, window_length=240, window_type='Hamming', display=False):
     if normalize:
         samples = normalization(samples)
 
@@ -338,34 +340,42 @@ def extractBFCC(samples, fs, normalize=False, fft_points=256, Bark_filters=24, B
     power = np.abs(spectrum)[:,0: fft_points // 2 + 1]
     power = power ** 2 / fft_points
 
-    # transfer frequency into Mel-frequency
-    low_freq = 13 * np.arctan(0.76 * 20 / 1000) + 0.35 * np.arctan(np.square(20 / 7500))
-    high_freq = 13 * np.arctan(0.76 * fs / 1000) + 0.35 * np.arctan(np.square(fs / 7500))
+    # transfer frequency into Bark-frequency
+    low_freq = 6. * np.arcsinh(low_freq / 600.)
+    high_freq = min(6. * np.arcsinh(high_freq / 600.), fs / 2)
     bark_freq = np.linspace(low_freq, high_freq, Bark_filters + 2)
-    hz_freq = bark_freq * (np.exp(0.219 * bark_freq) + 1) - 0.032 * np.exp(-0.15 * np.square(bark_freq - 5))
+    hz_freq = 600. * np.sinh(bark_freq / 6.)
 
-    bin = np.floor((fft_points // 2 + 1) * hz_freq / fs)
+    bin = (fft_points // 2 + 1) * hz_freq / fs
 
-    fbank = np.zeros((Bark_filters, np.floor(fft_points // 2 + 1)))
+    fbank = np.zeros((Bark_filters, int(np.floor(fft_points // 2 + 1))))
 
     for m in range(1, Bark_filters + 1):
         low = int(bin[m - 1])
         center = int(bin[m])
         high = int(bin[m + 1])
-        for k in range(low, center):
-            fbank[m - 1, k] = (k - low) / (center - low)
-        for k in range(center, high):
-            fbank[m - 1, k] = (high - k) / (high - center)
+        for k in range(low, high):
+            delta = center - k
+            if delta < -1.3:
+                fbank[m - 1, k] = 0
+            elif -1.3 <= delta <= -0.5:
+                fbank[m - 1, k] = 10 ** (2.5 * (k + 0.5))
+            elif -0.5 <= delta <= 0.5:
+                fbank[m - 1, k] = 1
+            elif 0.5 <= delta <= 2.5:
+                fbank[m - 1, k] = 10 ** (-0.1 * (k - 0.5))
+            else:
+                fbank[m - 1, k] = 0
 
     filter_banks = np.dot(power, fbank.T)
     filter_banks = np.where(filter_banks == 0, np.finfo(float).eps, filter_banks)
     filter_banks = 20 * np.log10(filter_banks).clip(1e-5, np.inf)
     filter_banks -= (np.mean(filter_banks, axis=0) + 1e-8)
 
-    mfcc = dct(filter_banks, type=2, axis=1, norm='ortho')[:, 1: (Bark_cofficients + 1)]
+    bfcc = dct(filter_banks, type=2, axis=1, norm='ortho')[:, 1: (Bark_cofficients + 1)]
 
     if display:
-        plt.imshow(mfcc.T, cmap='jet', origin='lower')
+        plt.imshow(bfcc.T, cmap='jet', origin='lower')
         plt.axis('auto')
         plt.colorbar(cax=None, ax=None)
         plt.title("Bark Frequency Cepstrum Coefficient")
@@ -373,11 +383,7 @@ def extractBFCC(samples, fs, normalize=False, fft_points=256, Bark_filters=24, B
         plt.xlabel("Frames")
         plt.show()
 
-    return mfcc
-
-
-def extractFrequencyBandEnergy(samples, fs, normalize=False, fft_points=256, overlapping=80, window_length=240, window_type='Hamming', display=False):
-    pass
+    return bfcc
 
 
 def PLP():
