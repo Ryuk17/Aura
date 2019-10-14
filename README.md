@@ -14,7 +14,8 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
     + **pesqTest()**: PESQ test for speech
     + **preEmphasis()**: pre emphasis speech
 
-2. [speech_features](https://github.com/DandelionLau/Ryuk/blob/master/speech_features.py): extract basic features from speech, including   
+2. [basic_features](https://github.com/DandelionLau/Ryuk/blob/master/basic_features.py): extract basic features from speech, including     
+    + **addNoise()**: add noise on speech samples
     + **estimatePitch()**: estimate pitch of each frame
     + **extractBFCC()**: extract BFCCs of each frame    
     + **extractMFCC()**: extract MFCCs of each frame 
@@ -24,11 +25,14 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
     + **shortCorrelation()**: calculate the short correlation of a given speech sample
     + **shortAverageMagnitudeDifference()**: calculate the short average magnitude difference of a given speech sample
 
-
 3. [SpeechFingerprinting](https://github.com/DandelionLau/Ryuk/blob/master/SpeechFingerprinting.py): extract speech
     + **extractFBEFingerprinting**: extract fingerprinting based on frequency band energy
     + **extractLandmarksFingerprinting()**: extract fingerprinting based on landmarks
-4. [VAD](https://github.com/DandelionLau/Ryuk/blob/master/VAD.py)：Voice activity detection method
+    
+4. [SpeechActivityDetection](https://github.com/DandelionLau/Ryuk/blob/master/SpeechActivityDetection.py)：Voice activity detection method
+
+5. [SpeechDenoising](https://github.com/DandelionLau/Ryuk/blob/master/SpeechDenoising.py)
+6. [SpeechRecognition](https://github.com/DandelionLau/Ryuk/blob/master/SpeechRecognition.py)
 
 ### Dependences
 1. Install [Python 3.6](https://www.python.org/)
