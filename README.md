@@ -16,7 +16,7 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
 
 2. [speech_features](https://github.com/DandelionLau/Ryuk/blob/master/speech_features.py): extract basic features from speech, including   
     + **estimatePitch()**: estimate pitch of each frame
-    + **extractBFCC()**: extract MFCCs of each frame    
+    + **extractBFCC()**: extract BFCCs of each frame    
     + **extractMFCC()**: extract MFCCs of each frame 
     + **extractSpectogram()**: calculate the spectogram of a given speech sample
     + **shortEnergy()**: calculate the short energy of a given speech sample
@@ -25,7 +25,9 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
     + **shortAverageMagnitudeDifference()**: calculate the short average magnitude difference of a given speech sample
 
 
-3. [SpeechFingerprinting](https://github.com/DandelionLau/Ryuk/blob/master/SpeechFingerprinting.py)
+3. [SpeechFingerprinting](https://github.com/DandelionLau/Ryuk/blob/master/SpeechFingerprinting.py): extract speech
+    + **extractFBEFingerprinting**: extract fingerprinting based on frequency band energy
+    + **extractLandmarksFingerprinting()**: extract fingerprinting based on landmarks
 4. [VAD](https://github.com/DandelionLau/Ryuk/blob/master/VAD.py)：Voice activity detection method
 
 ### Dependences
