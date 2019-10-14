@@ -8,9 +8,9 @@
 import tensorflow as tf
 
 class Recognizer():
-    def __init__(self, samples, params, normalize=False, Acoustics_model='cnn_ctc', Language_model='transformer', overlapping=0, window_length=240, window_type='Rectangle'):
+    def __init__(self, samples, fs, normalize=False, Acoustics_model='cnn_ctc', Language_model='transformer', overlapping=0, window_length=240, window_type='Rectangle'):
         self.samples = samples
-        self.params = params
+        self.params = fs
         self.normalize = normalize
         self.overlapping = overlapping
         self.window_length = window_length
@@ -27,3 +27,4 @@ class Recognizer():
             pass
         else:
             raise NameError('Unrecongnized Language model')
+

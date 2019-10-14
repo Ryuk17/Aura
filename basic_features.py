@@ -1,14 +1,15 @@
 """
-@ Filename:       speech_features.py
+@ Filename:       basic_features.py
 @ Author:         Danc1elion
-@ Create Date:    2019-10-01   
-@ Update Date:    2019-10-04
-@ Description:    Implement speech_features
+@ Create Date:    2019-10-14   
+@ Update Date:    2019-10-14 
+@ Description:    Implement basic_features
 """
 
 from basic_functions import *
-from matplotlib.ticker import FuncFormatter
-from tqdm import tqdm
+from scipy.fftpack import dct
+from scipy.fftpack import fft
+
 
 def shortEnergy(samples, fs, normalize=False, overlapping=0, window_length=240, window_type='Rectangle', display=False):
     """
@@ -372,7 +373,7 @@ def extractBFCC(samples, fs, normalize=False, low_freq=0, high_freq=8000, fft_po
     filter_banks = 20 * np.log10(filter_banks).clip(1e-5, np.inf)
     filter_banks -= (np.mean(filter_banks, axis=0) + 1e-8)
 
-    bfcc = dct(filter_banks, type=2, axis=1, norm='ortho')[:, 1: (Bark_cofficients + 1)]
+    bfcc = np.dct(filter_banks, type=2, axis=1, norm='ortho')[:, 1: (Bark_cofficients + 1)]
 
     if display:
         plt.imshow(bfcc.T, cmap='jet', origin='lower')

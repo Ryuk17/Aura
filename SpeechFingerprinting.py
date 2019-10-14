@@ -6,14 +6,10 @@
 @ Description:    Implement SpeechFingerprinting
 """
 
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy import special
-from basic_functions import *
-from  speech_features import *
+from basic_features import *
 
 
-def FBEFingerprinting(samples, fs, normalize=False, fft_points=512, n_bands=33, low_freq=300, high_freq=2000, overlapping=0, window_length=240, window_type='Rectangle', display=False):
+def extractFBEFingerprinting(samples, fs, normalize=False, fft_points=512, n_bands=33, low_freq=300, high_freq=2000, overlapping=0, window_length=240, window_type='Rectangle', display=False):
     """
     extract fingerprinting based on frequency band energy
     :param samples: speech sample
@@ -95,8 +91,21 @@ def FBEFingerprinting(samples, fs, normalize=False, fft_points=512, n_bands=33, 
     return fp
 
 
-def landmarksFingerprinting(samples, fs, normalize=False, height=64,  width=32, landmarks=1, fft_points=512, overlapping=0, window_length=240, window_type='Rectangle', display=False):
-
+def extractLandmarksFingerprinting(samples, fs, normalize=False, height=64,  width=32, fft_points=512, overlapping=0, window_length=240, window_type='Rectangle', display=False):
+    """
+     extract fingerprinting based on landmarks
+    :param samples: speech sample
+    :param fs: sample frequency
+    :param normalize: whether to normalize speech
+    :param height: matrix height
+    :param width: matrix width
+    :param fft_points: fft points
+    :param overlapping: overlapping length
+    :param window_length: frame length
+    :param window_type: window type
+    :param display: whether to display
+    :return: fingerprinting
+    """
     if normalize:
         samples = normalization(samples)
 

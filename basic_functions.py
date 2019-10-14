@@ -8,12 +8,9 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 from scipy import special
-from scipy.fftpack import dct
-import scipy.io.wavfile as wav
-from scipy.fftpack import fft
 import subprocess
+
 
 def normalization(data):
     """
@@ -119,9 +116,52 @@ def displaySpeech(samples, fs):
 
 
 def pesqTest(raw_wav_path, deg_wav_path, fs):
+    """
+    pesq test
+    :param raw_wav_path: raw speech samples file path
+    :param deg_wav_path: degradation speech samples file path
+    :param fs: sample frequency
+    :return: save pesq value in current fold pesq_result.txt
+    """
     pesq_exe = "./utils/PESQ/pesq.exe"
     commad = str('+') + str(fs) + ' ' + raw_wav_path + ' ' + deg_wav_path
     subprocess.Popen(pesq_exe + ' ' + commad)
 
 
+def addNoise(samples, fs, mu=0, sigma=0.1, lam=1, n=1000, p=0.613, noise_type='', display=False):
+
+    raw_samples = samples
+    noise_samples = normalization(samples)
+
+    if noise_type == ' Impulse':
+        noise = np.zeros(len(samples))
+    elif noise_type == 'Gaussian':
+        noise = np.random.normal(mu, sigma, len(samples))
+    elif noise_type == 'Binomial':
+        noise = np.random.binomial(n, p, len(samples))
+    elif noise_type == 'Monte Carlo':
+        noise = np.random.random(len(samples))
+    elif noise_type == 'Poisson':
+        noise = np.random.poisson(lam, len(samples))
+    else:
+        raise NameError('Unrecongnized noise type')
+
+    noise_samples += noise
+
+
+    if display:
+        time = np.arange(0, len(samples)) * (1.0 / fs)
+
+        plt.subplot(2, 1, 1)
+        plt.plot(time, samples)
+        plt.title("Raw Speech")
+        plt.xlabel("time (seconds)")
+
+        plt.subplot(2, 1, 2)
+        plt.plot(time, noise_samples)
+        plt.title("Raw Speech")
+        plt.xlabel("time (seconds)")
+        plt.show()
+
+    return samples
 
