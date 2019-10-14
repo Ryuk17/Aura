@@ -16,14 +16,14 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
     + **preEmphasis()**: pre emphasis speech
 
 2. [basic_features](https://github.com/DandelionLau/Ryuk/blob/master/basic_features.py): extract basic features from speech, including     
-    + **estimatePitch()**: estimate pitch of each frame
+    + **extractPitch()**: estimate pitch of each frame
     + **extractBFCC()**: extract BFCCs of each frame    
     + **extractMFCC()**: extract MFCCs of each frame 
     + **extractSpectogram()**: calculate the spectogram of a given speech sample
-    + **extractshortEnergy()**: calculate the short energy of a given speech sample
-    + **extractshortZcc()**: calculate the short zero crossing count of a given speech sample
-    + **extractshortCorrelation()**: calculate the short correlation of a given speech sample
-    + **extractshortAverageMagnitudeDifference()**: calculate the short average magnitude difference of a given speech sample
+    + **extractShortEnergy()**: calculate the short energy of a given speech sample
+    + **extractShortZcc()**: calculate the short zero crossing count of a given speech sample
+    + **extractShortCorrelation()**: calculate the short correlation of a given speech sample
+    + **extractShortAverageMagnitudeDifference()**: calculate the short average magnitude difference of a given speech sample
 
 3. [SpeechFingerprinting](https://github.com/DandelionLau/Ryuk/blob/master/SpeechFingerprinting.py): extract speech
     + **extractFBEFingerprinting**: extract fingerprinting based on frequency band energy
