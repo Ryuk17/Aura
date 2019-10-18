@@ -29,7 +29,7 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
     + **extractFBEFingerprinting**: extract fingerprinting based on frequency band energy
     + **extractLandmarksFingerprinting()**: extract fingerprinting based on landmarks
     
-4. [SpeechActivityDetection](https://github.com/DandelionLau/Ryuk/blob/master/SpeechActivityDetection.py)：Voice activity detection method
+4. [SpeechActivityDetection](https://github.com/DandelionLau/Ryuk/blob/master/SpeechActivityDetection.py)：Voice activity detection 
 
 
 ### Dependences
