@@ -31,8 +31,6 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
     
 4. [SpeechActivityDetection](https://github.com/DandelionLau/Ryuk/blob/master/SpeechActivityDetection.py)：Voice activity detection method
 
-5. [SpeechDenoising](https://github.com/DandelionLau/Ryuk/blob/master/SpeechDenoising.py)
-6. [SpeechRecognition](https://github.com/DandelionLau/Ryuk/blob/master/SpeechRecognition.py)
 
 ### Dependences
 1. Install [Python 3.6](https://www.python.org/)
