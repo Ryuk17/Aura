@@ -6,8 +6,6 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
 ### Join us
 QQ Group: 652292630
 
-### Usage
-
 
 ### What's in it
 1. [basic_functions](https://github.com/DandelionLau/Ryuk/blob/master/base_functions.py): basic function for speech signal processing, including  
