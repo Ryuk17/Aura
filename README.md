@@ -8,7 +8,7 @@ QQ Group: 652292630
 
 
 ### What's in it
-1. [basic_functions](hhttps://github.com/DandelionLau/Ryuk/blob/master/basic_functions.py): basic function for speech signal processing, including  
+1. [basic_functions](https://github.com/DandelionLau/Ryuk/blob/master/basic_functions.py): basic function for speech signal processing, including  
     + **addNoise()**: add noise on speech samples
     + **displaySpeech()**: display waveform of a given speech sample
     + **enframe()**: split speech into frames
