@@ -5,7 +5,7 @@ Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech re
 
 ### Join us
 QQ Group: 652292630  
-![QQ Group: 652292630](https://github.com/DandelionLau/Ryuk/blob/master/images/qr.jpg)
+<img src="https://github.com/DandelionLau/Ryuk/blob/master/images/qr.jpg" width="270">
 
 
 ### What's in it
