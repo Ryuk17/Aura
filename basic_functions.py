@@ -1,15 +1,17 @@
 """
-@ Filename:       basic_functions.py
-@ Author:         Danc1elion
-@ Create Date:    2019-10-03   
-@ Update Date:    2019-10-04
-@ Description:    Implement basic_functions
+@FileName: basic_functions.py
+@Description: Implement basic_functions
+@Author  : Ryuk
+@CreateDate: 2019/11/13 13:47
+@LastEditTime: 2020/04/25 13:47
+@LastEditors: Please set LastEditors
+@Version: v1.0
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy import special
 import subprocess
+from numpy.linalg import norm
 
 
 def normalization(data):
@@ -20,55 +22,6 @@ def normalization(data):
     """
     normalized_data = 2 * (data - min(data)) / (max(data) - min(data)) - 1
     return normalized_data
-
-
-def enframe(samples, fs, beta=8.5, overlapping=0, window_length=240, window_type='Rectangle'):
-    """
-    divede samples into frame
-    :param samples:
-    :param fs: sample frequency
-    :param frame_num:
-    :param window_length:
-    :param window_type:
-    :return: enframed frames
-    """
-
-    frames_num = len(samples) // (window_length - overlapping)
-    frames = np.zeros([frames_num, window_length])
-    for i in range(frames_num):
-        start = i * (window_length - overlapping)
-        end = start + window_length
-        data = samples[start:end]
-
-        N = len(data)
-        x = np.linspace(0, N - 1, N, dtype=np.int64)
-
-        if window_type == 'Rectangle':
-            data = data
-        elif window_type == 'Triangle':
-            for i in range(N):
-                if i < N:
-                    data[i] = 2 * i / (N - 1)
-                else:
-                    data[i] = 2 - 2 * i / (N - 1)
-        elif window_type == 'Hamming':
-            w = 0.54 - 0.46 * np.cos(2 * np.pi * x / (N - 1))
-            data = data * w
-        elif window_type == 'Hanning':
-            w = 0.5 * (1 - np.cos(2 * np.pi * x / (N - 1)))
-            data = data * w
-        elif window_type == 'Blackman':
-            w = 0.42 - 0.5 * (1 - np.cos(2 * np.pi * x / (N - 1))) + 0.08 * np.cos(4 * np.pi * x / (N - 1))
-            data = data * w
-        elif window_type == 'Kaiser':
-            w = special.j0(beta * np.sqrt(1 - np.square(1 - 2 * x / (N - 1)))) / special.j0(beta)
-            data = data * w
-        else:
-            raise NameError('Unrecongnized window type')
-
-        frames[i] = data
-    return frames
-
 
 def preEmphasis(samples, fs, alpha=0.9375, overlapping=0, window_length=240, window_type='Rectangle', display=False):
     """
@@ -165,3 +118,19 @@ def addNoise(samples, fs, mu=0, sigma=0.1, lam=1, n=1000, p=0.613, noise_type=''
 
     return samples
 
+
+def getSNR(signal, noise):
+    """
+    calcluate getSNR
+    :param signal: signal
+    :param noise: noise
+    :return: SNR in log
+    """
+    return 20 * np.log10(norm(signal) / norm(noise))
+
+
+def nextpow2(x):
+    if x == 0:
+        return 0
+    else:
+        return np.ceil(np.log2(x))
