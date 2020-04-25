@@ -33,7 +33,10 @@ QQ Group: 652292630
     
 4. [SpeechActivityDetection](https://github.com/DandelionLau/Ryuk/blob/master/SpeechActivityDetection.py)：Voice activity detection 
 
-
+5. [SpeechDenoising](https://github.com/Ryuk17/speechbox/blob/master/SpeechDenoising.py): Noise reduce  
+    + **SpectralSubtractiong**: noise reduce by employing spectral subtraction
+    
+    
 ### Dependences
 1. Install [Python 3.6](https://www.python.org/)
 2. Install [NumPy](http://www.numpy.org/)
