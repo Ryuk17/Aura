@@ -1,27 +1,26 @@
 ## Welcome to speechbox
 
 [![GPL-3.0 Licensed](https://img.shields.io/crates/l/rustc-serialize)](https://opensource.org/licenses/GPL-3.0) [![TensorFlow Version](https://img.shields.io/badge/Tensorflow-1.7+-blue.svg)](https://www.tensorflow.org/) [![Keras Version](https://img.shields.io/badge/Keras-2.0+-blue.svg)](https://keras.io/) [![Python Version](https://img.shields.io/badge/Python-3.x-blue.svg)](https://www.python.org/)  
-Ryuk is about Speech processing, Speech ehancement, Speech separation, Speech recognition and etc.
-
-### Join us
-QQ Group: 652292630  
-<img src="https://github.com/DandelionLau/Ryuk/blob/master/images/qr.jpg" width="270">
+speechbox is about Speech processing, Speech ehancement, Speech separation, Speech recognition and etc.
 
 
 ### What's in it
-1. [basic_functions](https://github.com/DandelionLau/Ryuk/blob/master/basic_functions.py): basic function for speech signal processing, including  
-    + **addNoise()**: add noise on speech samples
+1. [basic_functions](https://github.com/Ryuk17/speechbox/blob/master/utils/basic_functions.py): basic function for speech signal processing, including  
+    + **addNoise()**: add noise to raw speech   
+    + **addEcho()**: add echo to raw speech  
+    + **addReverberation()**: add reverberation to raw speech  
+    + **addHowl()**: add howl to raw speech
     + **displaySpeech()**: display waveform of a given speech sample
-    + **enframe()**: split speech into frames
     + **normalization()**: normalize data into [-1, 1]
     + **pesqTest()**: PESQ test for speech
     + **preEmphasis()**: pre emphasis speech
+    + **getSNR()**: calculate SNR 
+    + **nextPow2()**: calculate the nearest pow2 of a given number
 
-2. [basic_features](https://github.com/DandelionLau/Ryuk/blob/master/basic_features.py): extract basic features from speech, including     
+2. [basic_features](https://github.com/Ryuk17/speechbox/blob/master/utils/basic_features.py): extract basic features from speech, including     
     + **extractPitch()**: estimate pitch of each frame
     + **extractBFCC()**: extract BFCCs of each frame    
     + **extractMFCC()**: extract MFCCs of each frame 
-    + **extractSpectogram()**: calculate the spectogram of a given speech sample
     + **extractShortEnergy()**: calculate the short energy of a given speech sample
     + **extractShortZcc()**: calculate the short zero crossing count of a given speech sample
     + **extractShortCorrelation()**: calculate the short correlation of a given speech sample
@@ -31,7 +30,6 @@ QQ Group: 652292630
     + **extractFBEFingerprinting**: extract fingerprinting based on frequency band energy
     + **extractLandmarksFingerprinting()**: extract fingerprinting based on landmarks
     
-4. [SpeechActivityDetection](https://github.com/DandelionLau/Ryuk/blob/master/SpeechActivityDetection.py)：Voice activity detection 
 
 5. [SpeechDenoising](https://github.com/Ryuk17/speechbox/blob/master/SpeechDenoising.py): Noise reduce  
     + **SpectralSubtractiong**: noise reduce by employing spectral subtraction
