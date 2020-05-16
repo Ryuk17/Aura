@@ -22,16 +22,16 @@ speechbox is about Speech processing, Speech ehancement, Speech separation, Spee
     + **extractBFCC()**: extract BFCCs of each frame    
     + **extractMFCC()**: extract MFCCs of each frame 
     + **extractShortEnergy()**: calculate the short energy of a given speech sample
-    + **extractShortZcc()**: calculate the short zero crossing count of a given speech sample
+    + **extractShortZcr()**: calculate the short zero crossing rate of a given speech sample
     + **extractShortCorrelation()**: calculate the short correlation of a given speech sample
     + **extractShortAverageMagnitudeDifference()**: calculate the short average magnitude difference of a given speech sample
 
-3. [SpeechFingerprinting](https://github.com/DandelionLau/Ryuk/blob/master/SpeechFingerprinting.py): extract speech
+3. [SpeechFingerprinting](https://github.com/DandelionLau/Ryuk/blob/master/SpeechFingerprinting.py): extract fingerprinting from speech
     + **extractFBEFingerprinting**: extract fingerprinting based on frequency band energy
     + **extractLandmarksFingerprinting()**: extract fingerprinting based on landmarks
     
 
-5. [SpeechDenoising](https://github.com/Ryuk17/speechbox/blob/master/SpeechDenoising.py): Noise reduce  
+4. [SpeechDenoising](https://github.com/Ryuk17/speechbox/blob/master/SpeechDenoising.py): Noise reduce  
     + **SpectralSubtractiong**: noise reduce by employing spectral subtraction
     
     
