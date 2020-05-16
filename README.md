@@ -38,6 +38,6 @@ speechbox is about Speech processing, Speech ehancement, Speech separation, Spee
 ### Dependences
 1. Install [Python 3.6](https://www.python.org/)
 2. Install [NumPy](http://www.numpy.org/)
-2. Install [Scikit-learn](https://scikit-learn.org/)
+3. Install[LibROSA](http://librosa.github.io/librosa/)
 
 
