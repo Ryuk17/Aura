@@ -1,13 +1,13 @@
 """
 @ Filename:       SpeechDenoising.py
-@ Author:         Danc1elion
+@ Author:         Ryuk
 @ Create Date:    2019-10-14   
 @ Update Date:    2019-10-14 
 @ Description:    Implement SpeechDenoising
 """
 
 import librosa
-from basic_functions import *
+from .utils.basic_functions import *
 
 class SpectralSubtraction:
     def __init__(self, input_path, sr, win_length=240, overlapping_rate=0.5, beta=0.002, mono=True, noise_frames=5):
@@ -18,7 +18,7 @@ class SpectralSubtraction:
         self.overlapping_length = int(overlapping_rate * win_length)           # overlapping length
         self.hop_length = int((1 - overlapping_rate) * win_length)             # frame shift length
         self.beta = beta                                                       # beta for Berouti spectral subtraction
-        self.nfft = 2 * int(pow(2, nextpow2(win_length)))                      # fft points
+        self.nfft = 2 * int(pow(2, nextPow2(win_length)))                      # fft points
         self.output = None                                                     # output wave
 
     def getNoiseSpectrum(self):

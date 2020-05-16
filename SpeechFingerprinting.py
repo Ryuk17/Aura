@@ -1,19 +1,19 @@
 """
 @ Filename:       SpeechFingerprinting.py
-@ Author:         Danc1elion
+@ Author:         Ryuk
 @ Create Date:    2019-10-05   
-@ Update Date:    2019-10-05 
+@ Update Date:    2020-5-16
 @ Description:    Implement SpeechFingerprinting
 """
 
-from basic_features import *
+from .utils.basic_functions import *
+import librosa
 
-
-def extractFBEFingerprinting(samples, fs, normalize=False, fft_points=512, n_bands=33, low_freq=300, high_freq=2000, overlapping=0, window_length=240, window_type='Rectangle', display=False):
+def extractFBEFingerprinting(samples, sr, normalize=False, fft_points=512, n_bands=33, low_freq=300, high_freq=2000, overlapping=0, window_length=240, window_type='Rectangle', display=False):
     """
     extract fingerprinting based on frequency band energy
     :param samples: speech sample
-    :param fs: sample frequency
+    :param sr: sample frequency
     :param normalize: whether to normalize speech
     :param fft_points:  fft points
     :param n_bands: number of bands
@@ -29,22 +29,22 @@ def extractFBEFingerprinting(samples, fs, normalize=False, fft_points=512, n_ban
         samples = normalization(samples)
 
     # pre emphasis
-    samples = preEmphasis(samples, fs, display=False)
+    samples = preEmphasis(samples, sr, display=False)
 
     # enframe
-    frames = enframe(samples, fs, overlapping=overlapping, window_length=window_length, window_type=window_type)
-
+    hop_length = (1 - overlapping) * window_length
+    frames = librosa.util.frame(samples, frame_length=window_length, hop_length=hop_length).T
     spectrum = np.fft.fft(frames, fft_points)
     power = np.abs(spectrum)[:, 0: fft_points // 2 + 1]
     power = power ** 2 / fft_points
 
     # transfer frequency into Bark-frequency
     low_freq = 6. * np.arcsinh(low_freq / 600.)
-    high_freq = min(6. * np.arcsinh(high_freq / 600.), fs / 2)
+    high_freq = min(6. * np.arcsinh(high_freq / 600.), sr / 2)
     bark_freq = np.linspace(low_freq, high_freq, n_bands + 2)
     hz_freq = 600. * np.sinh(bark_freq / 6.)
 
-    bin = (fft_points // 2 + 1) * hz_freq / fs
+    bin = (fft_points // 2 + 1) * hz_freq / sr
 
     fbank = np.zeros((n_bands, int(np.floor(fft_points // 2 + 1))))
 
@@ -91,11 +91,11 @@ def extractFBEFingerprinting(samples, fs, normalize=False, fft_points=512, n_ban
     return fp
 
 
-def extractLandmarksFingerprinting(samples, fs, normalize=False, height=64,  width=32, fft_points=512, overlapping=0, window_length=240, window_type='Rectangle', display=False):
+def extractLandmarksFingerprinting(samples, sr, normalize=False, height=64,  width=32, fft_points=512, overlapping=0, window_length=240, window_type='Rectangle', display=False):
     """
      extract fingerprinting based on landmarks
     :param samples: speech sample
-    :param fs: sample frequency
+    :param sr: sample frequency
     :param normalize: whether to normalize speech
     :param height: matrix height
     :param width: matrix width
@@ -110,11 +110,13 @@ def extractLandmarksFingerprinting(samples, fs, normalize=False, height=64,  wid
         samples = normalization(samples)
 
     # pre emphasis
-    samples = preEmphasis(samples, fs, display=False)
+    samples = preEmphasis(samples, sr, display=False)
+    hop_length = (1 - overlapping) * window_length
+    spectogram = librosa.stft(samples, sr, n_fft=fft_points, win_length=window_length, hop_length=hop_length, window_type=window_type)
 
-    spectogram = extractSpectogram(samples, fs, normalize=normalize, fft_points=fft_points, overlapping=overlapping, window_length=window_length, window_type=window_type, display=False)
-
+    spectogram = np.abs(spectogram)
     fp = np.zeros(spectogram.shape)
+
     # get landmarks
     for i in range(0, len(spectogram), height):
         for j in range(0, len(spectogram[0]), width):
