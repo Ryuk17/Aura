@@ -1,9 +1,9 @@
 """
-@FileName: io.py
-@Description: Implement io
+@FileName: io.py.py
+@Description: Implement io.py
 @Author: Ryuk
-@CreateDate: 2021/03/09
-@LastEditTime: 2021/03/09
+@CreateDate: 2021/03/10
+@LastEditTime: 2021/03/10
 @LastEditors: Please set LastEditors
 @Version: v0.1
 """
@@ -11,7 +11,16 @@
 import struct
 import array
 import os
+import soundfile as sf
 import numpy as np
+
+
+__all__ = [
+    "read_pcm",
+    "write_pcm",
+    "read_wav",
+    "write_wav"
+]
 
 
 def read_pcm(pcm_path, bitwidth):
@@ -72,3 +81,10 @@ def write_pcm(pcm_path, pcm_data, bitwidth):
         else:
             raise Exception("Invalid bitwidth!")
         file.write(sample)
+
+
+def read_wav():
+    pass
+
+def write_wav():
+    pass
