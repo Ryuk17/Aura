@@ -48,8 +48,6 @@ def read_pcm(pcm_path, bitwidth):
         pcm_data = pcm_data / 32768
     else:
         raise Exception("Invalid bitwidth!")
-
-
     return pcm_data
 
 
