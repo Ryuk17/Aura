@@ -2,27 +2,7 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="e79038a2-34a9-458f-b822-606d25ef6d1b" name="Default" comment="">
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/array/__init__.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/array/ssl.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/augment/__init__.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/effect/__init__.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/filter/__init__.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/filter/fir_filter.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/metrics/__init__.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/mono/__init__.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/mono/denoise.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/mono/resample.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/mono/td_psola.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/mono/vad.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/music/__init__.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/stereo/__init__.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/utils.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/watermarking/__init__.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/lawliet/watermarking/lsb.py" />
-      <change beforePath="" afterPath="$PROJECT_DIR$/setup.py" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" afterPath="$PROJECT_DIR$/.idea/workspace.xml" />
-      <change beforePath="$PROJECT_DIR$/_config.yml" afterPath="" />
-      <change beforePath="$PROJECT_DIR$/lawliet/io/io.py" afterPath="$PROJECT_DIR$/lawliet/io/io.py" />
     </list>
     <option name="EXCLUDED_CONVERTED_TO_IGNORED" value="true" />
     <option name="TRACKING_ENABLED" value="true" />
@@ -36,9 +16,11 @@
       <file leaf-file-name="io.py" pinned="false" current-in-tab="true">
         <entry file="file://$PROJECT_DIR$/lawliet/io/io.py">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="185">
-              <caret line="11" column="12" lean-forward="true" selection-start-line="11" selection-start-column="12" selection-end-line="11" selection-end-column="12" />
-              <folding />
+            <state relative-caret-position="104">
+              <caret line="49" column="44" lean-forward="false" selection-start-line="49" selection-start-column="44" selection-end-line="49" selection-end-column="44" />
+              <folding>
+                <element signature="e#175#188#0" expanded="true" />
+              </folding>
             </state>
           </provider>
         </entry>
@@ -53,6 +35,11 @@
     </option>
   </component>
   <component name="Git.Settings">
+    <option name="PREVIOUS_COMMIT_AUTHORS">
+      <list>
+        <option value="Ryuk &lt;liujieit@foxmail.com&gt;" />
+      </list>
+    </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
   <component name="IdeDocumentHistory">
@@ -73,9 +60,9 @@
         <option value="$PROJECT_DIR$/lawliet/filter/fir_filter.py" />
         <option value="$PROJECT_DIR$/lawliet/utils.py" />
         <option value="$PROJECT_DIR$/lawliet/mono/td_psola.py" />
-        <option value="$PROJECT_DIR$/lawliet/io/io.py" />
         <option value="$PROJECT_DIR$/lawliet/watermarking.py" />
         <option value="$PROJECT_DIR$/lawliet/watermarking/lsb.py" />
+        <option value="$PROJECT_DIR$/lawliet/io/io.py" />
       </list>
     </option>
   </component>
@@ -169,14 +156,29 @@
       <option name="presentableId" value="Default" />
       <updated>1615298414933</updated>
     </task>
+    <task id="LOCAL-00001" summary="add new modules">
+      <created>1624799252206</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1624799252206</updated>
+    </task>
+    <task id="LOCAL-00002" summary="add new modules">
+      <created>1624799736885</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1624799736885</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="ToolWindowManager">
     <frame x="-9" y="-9" width="1938" height="1098" extended-state="6" />
     <layout>
-      <window_info id="Project" active="true" anchor="left" auto_hide="false" internal_type="DOCKED" type="DOCKED" visible="true" show_stripe_button="true" weight="0.25" sideWeight="0.5" order="0" side_tool="false" content_ui="combo" />
+      <window_info id="Project" active="false" anchor="left" auto_hide="false" internal_type="DOCKED" type="DOCKED" visible="true" show_stripe_button="true" weight="0.25" sideWeight="0.5" order="0" side_tool="false" content_ui="combo" />
       <window_info id="TODO" active="false" anchor="bottom" auto_hide="false" internal_type="DOCKED" type="DOCKED" visible="false" show_stripe_button="true" weight="0.33" sideWeight="0.5" order="6" side_tool="false" content_ui="tabs" />
-      <window_info id="Event Log" active="false" anchor="bottom" auto_hide="false" internal_type="DOCKED" type="DOCKED" visible="false" show_stripe_button="true" weight="0.33" sideWeight="0.5" order="7" side_tool="true" content_ui="tabs" />
+      <window_info id="Event Log" active="true" anchor="bottom" auto_hide="false" internal_type="DOCKED" type="DOCKED" visible="true" show_stripe_button="true" weight="0.3298647" sideWeight="0.5" order="7" side_tool="true" content_ui="tabs" />
       <window_info id="Version Control" active="false" anchor="bottom" auto_hide="false" internal_type="DOCKED" type="DOCKED" visible="false" show_stripe_button="true" weight="0.33" sideWeight="0.5" order="7" side_tool="false" content_ui="tabs" />
       <window_info id="Python Console" active="false" anchor="bottom" auto_hide="false" internal_type="DOCKED" type="DOCKED" visible="false" show_stripe_button="true" weight="0.33" sideWeight="0.5" order="7" side_tool="false" content_ui="tabs" />
       <window_info id="Run" active="false" anchor="bottom" auto_hide="false" internal_type="DOCKED" type="DOCKED" visible="false" show_stripe_button="true" weight="0.33" sideWeight="0.5" order="2" side_tool="false" content_ui="tabs" />
@@ -196,6 +198,10 @@
   <component name="VcsContentAnnotationSettings">
     <option name="myLimit" value="2678400000" />
   </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="add new modules" />
+    <option name="LAST_COMMIT_MESSAGE" value="add new modules" />
+  </component>
   <component name="XDebuggerManager">
     <breakpoint-manager />
     <watches-manager />
@@ -205,7 +211,9 @@
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="0">
           <caret line="0" column="0" lean-forward="false" selection-start-line="0" selection-start-column="0" selection-end-line="0" selection-end-column="0" />
-          <folding />
+          <folding>
+            <element signature="e#175#188#0" expanded="true" />
+          </folding>
         </state>
       </provider>
     </entry>
@@ -221,7 +229,9 @@
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="0">
           <caret line="0" column="0" lean-forward="false" selection-start-line="0" selection-start-column="0" selection-end-line="0" selection-end-column="0" />
-          <folding />
+          <folding>
+            <element signature="e#175#188#0" expanded="true" />
+          </folding>
         </state>
       </provider>
     </entry>
@@ -371,9 +381,11 @@
     </entry>
     <entry file="file://$PROJECT_DIR$/lawliet/io/io.py">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="185">
-          <caret line="11" column="12" lean-forward="true" selection-start-line="11" selection-start-column="12" selection-end-line="11" selection-end-column="12" />
-          <folding />
+        <state relative-caret-position="104">
+          <caret line="49" column="44" lean-forward="false" selection-start-line="49" selection-start-column="44" selection-end-line="49" selection-end-column="44" />
+          <folding>
+            <element signature="e#175#188#0" expanded="true" />
+          </folding>
         </state>
       </provider>
     </entry>
