@@ -11,7 +11,6 @@
 import struct
 import array
 import os
-import soundfile as sf
 import numpy as np
 
 
@@ -87,4 +86,11 @@ def read_wav():
     pass
 
 def write_wav():
+    pass
+
+
+def read_mp3():
+    pass
+
+def write_mp3():
     pass
