@@ -1,5 +1,5 @@
 ## Welcome to Lawliet
-lawliet is a speech algorithms library
+lawliet is a cross platform speech processing library
 
 
 
