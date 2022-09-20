@@ -1,5 +1,4 @@
-## Welcome to Lawliet
-lawliet is a cross platform speech processing library
+RPI-VoiceBox, an AI voicebox on Raspberry Pi
 
 
 
