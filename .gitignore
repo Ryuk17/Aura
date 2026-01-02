@@ -12,11 +12,13 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+third_libs/
 develop-eggs/
 dist/
 downloads/
 eggs/
 .eggs/
+bin/
 lib/
 lib64/
 parts/
