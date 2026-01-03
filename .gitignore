@@ -18,6 +18,7 @@ dist/
 downloads/
 eggs/
 .eggs/
+.vscode/
 bin/
 lib/
 lib64/

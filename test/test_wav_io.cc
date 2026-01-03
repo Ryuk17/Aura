@@ -21,11 +21,11 @@ int main(int argc, char **argv)
 
     int frame_num = 1024;
     int total_samples = 0;
-    int16_t samples[1024];
+    int16_t wav_data[1024];
     while(true) 
     {
-        int read_samples = wav_reader.ReadSamples(frame_num, samples);
-        wav_writer.WriteSamples(samples, read_samples);
+        int read_samples = wav_reader.ReadSamples(frame_num, wav_data);
+        wav_writer.WriteSamples(wav_data, read_samples);
         total_samples += read_samples;
         if(read_samples < frame_num)
         {
