@@ -10,7 +10,7 @@
 
 // Modified from the Chromium original:
 // src/media/base/sinc_resampler.cc
-
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
 #include <arm_neon.h>
 
 #include "common_audio/resampler/sinc_resampler.h"
@@ -46,3 +46,5 @@ float SincResampler::Convolve_NEON(const float* input_ptr,
 }
 
 }  // namespace webrtc
+
+#endif

@@ -10,7 +10,7 @@
 
 // Modified from the Chromium original:
 // src/media/base/simd/sinc_resampler_sse.cc
-
+#if defined(__SSE2__) || defined(__SSE__)
 #include <xmmintrin.h>
 
 #include <cstddef>
@@ -62,3 +62,4 @@ float SincResampler::Convolve_SSE(const float* input_ptr,
 }
 
 }  // namespace webrtc
+#endif

@@ -8,6 +8,8 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#if defined(__AVX2__)
+
 #include <immintrin.h>
 #include <xmmintrin.h>
 
@@ -65,3 +67,5 @@ float SincResampler::Convolve_AVX2(const float* input_ptr,
 }
 
 }  // namespace webrtc
+
+#endif

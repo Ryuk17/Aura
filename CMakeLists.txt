@@ -11,7 +11,7 @@ if(CMAKE_TOOLCHAIN_FILE)
 endif()
 
 # 设置 C++ 标准
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
@@ -25,7 +25,8 @@ set(CMAKE_PREFIX_PATH
 
 find_package(absl REQUIRED)
 
-option(BUILD_TEST_WAVE_IO "Whether to build wav io unitest" ON)
+option(BUILD_TEST_WAVE_IO "Whether to build wav io unitest" OFF)
+option(BUILD_TEST_ANR "Whether to build anr unitest" ON)
 
 
 if(BUILD_TEST_WAVE_IO)
@@ -33,5 +34,9 @@ if(BUILD_TEST_WAVE_IO)
     add_wav_io_test_module()
 endif()
 
+if(BUILD_TEST_ANR)
+    include(cmake/test_anr.cmake)
+    add_anr_test_module()
+endif()
 
 
