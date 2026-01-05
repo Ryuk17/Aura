@@ -66,12 +66,14 @@ void VoiceActivityDetector::ProcessChunk(const int16_t* audio,
   std::copy(features_.rms, features_.rms + chunkwise_rms_.size(),
             chunkwise_rms_.begin());
   if (features_.num_frames > 0) {
-    if (features_.silence) {
+    if (features_.silence) 
+    {
       // The other features are invalid, so set the voice probabilities to an
       // arbitrary low value.
       std::fill(chunkwise_voice_probabilities_.begin(),
                 chunkwise_voice_probabilities_.end(), kLowProbability);
-    } else {
+    } else 
+    {
       std::fill(chunkwise_voice_probabilities_.begin(),
                 chunkwise_voice_probabilities_.end(), kNeutralProbability);
       RTC_CHECK_GE(
