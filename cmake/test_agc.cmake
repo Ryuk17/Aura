@@ -1,5 +1,6 @@
 function(add_agc_test_module)
     set(LIB_NAME "agc")
+    add_definitions(-DWEBRTC_APM_DEBUG_DUMP=0)
 
     add_library(${LIB_NAME} STATIC 
         "${PROJECT_SOURCE_DIR}/common_audio/wav_file.cc"
@@ -34,12 +35,14 @@ function(add_agc_test_module)
         "${PROJECT_SOURCE_DIR}/system_wrappers/source/clock.cc"
     )
 
+    file(GLOB AGC_SRC "${PROJECT_SOURCE_DIR}/modules/audio_processing/agc/*.cc")
     file(GLOB VAD_SRC "${PROJECT_SOURCE_DIR}/modules/audio_processing/vad/*.cc")
     file(GLOB RTC_VAD_SRC "${PROJECT_SOURCE_DIR}/common_audio/vad/*.c")
     file(GLOB ISAC_VAD_SRC "${PROJECT_SOURCE_DIR}/modules/audio_coding/codecs/isac/main/source/*.c")
     file(GLOB RESAMPLE_SRC "${PROJECT_SOURCE_DIR}/common_audio/resampler/*.cc")
 
     target_sources(${LIB_NAME} PRIVATE 
+        ${AGC_SRC}
         ${VAD_SRC}
         ${RTC_VAD_SRC}
         ${ISAC_VAD_SRC}
