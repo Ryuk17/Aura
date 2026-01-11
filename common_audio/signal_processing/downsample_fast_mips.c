@@ -8,6 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#if defined(__mips__) && (defined(MIPS_DSP_R1_LE) || defined(MIPS_DSP_R2_LE))
 #include "common_audio/signal_processing/include/signal_processing_library.h"
 
 // Version of WebRtcSpl_DownsampleFast() for MIPS platforms.
@@ -165,3 +166,5 @@ int WebRtcSpl_DownsampleFast_mips(const int16_t* data_in,
 #endif  // #if defined(MIPS_DSP_R2_LE)
   return 0;
 }
+
+#endif

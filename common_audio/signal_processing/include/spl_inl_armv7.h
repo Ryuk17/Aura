@@ -12,8 +12,11 @@
  * the fix point signal processing library.
  */
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+
 #ifndef COMMON_AUDIO_SIGNAL_PROCESSING_INCLUDE_SPL_INL_ARMV7_H_
 #define COMMON_AUDIO_SIGNAL_PROCESSING_INCLUDE_SPL_INL_ARMV7_H_
+
 
 #include <stdint.h>
 
@@ -136,3 +139,5 @@ static __inline int16_t WebRtcSpl_SatW32ToW16(int32_t value32) {
 }
 
 #endif  // COMMON_AUDIO_SIGNAL_PROCESSING_INCLUDE_SPL_INL_ARMV7_H_
+
+#endif

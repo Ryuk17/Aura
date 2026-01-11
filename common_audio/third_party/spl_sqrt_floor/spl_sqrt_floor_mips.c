@@ -29,6 +29,8 @@
 // Minor modifications in code style for WebRTC, 2012.
 // Code optimizations for MIPS, 2013.
 
+#if defined(__mips__) && (defined(MIPS_DSP_R1_LE) || defined(MIPS_DSP_R2_LE))
+
 #include "common_audio/third_party/spl_sqrt_floor/spl_sqrt_floor.h"
 
 /*
@@ -205,3 +207,4 @@ int32_t WebRtcSpl_SqrtFloor(int32_t value)
   return root >> 1;
 }
 
+#endif

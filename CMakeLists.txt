@@ -28,7 +28,8 @@ find_package(absl REQUIRED)
 option(BUILD_TEST_WAVE_IO "Whether to build wav io unitest" OFF)
 option(BUILD_TEST_ANR "Whether to build anr unitest" OFF)
 option(BUILD_TEST_VAD "Whether to build vad unitest" OFF)
-option(BUILD_TEST_AGC "Whether to build agc unitest" ON)
+option(BUILD_TEST_AECM "Whether to build aecm unitest" ON)
+option(BUILD_TEST_AGC "Whether to build agc unitest" OFF)
 
 
 if(BUILD_TEST_WAVE_IO)
@@ -45,6 +46,12 @@ if(BUILD_TEST_VAD)
     include(cmake/test_vad.cmake)
     add_vad_test_module()
 endif()
+
+if(BUILD_TEST_AECM)
+    include(cmake/test_aecm.cmake)
+    add_aecm_test_module()
+endif()
+
 
 if(BUILD_TEST_AGC)
     include(cmake/test_agc.cmake)

@@ -16,6 +16,8 @@
  *
  */
 
+#if defined(__mips__) && (defined(MIPS_DSP_R1_LE) || defined(MIPS_DSP_R2_LE))
+
 #include "common_audio/signal_processing/include/signal_processing_library.h"
 #include "rtc_base/checks.h"
 
@@ -362,3 +364,5 @@ int32_t WebRtcSpl_MinValueW32_mips(const int32_t* vector, size_t length) {
 
   return minimum;
 }
+
+#endif

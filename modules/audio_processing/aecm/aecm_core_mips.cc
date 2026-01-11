@@ -8,6 +8,9 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+
+#if defined(__mips__) && (defined(MIPS_DSP_R1_LE) || defined(MIPS_DSP_R2_LE))
+
 #include "modules/audio_processing/aecm/aecm_core.h"
 #include "modules/audio_processing/aecm/echo_control_mobile.h"
 #include "modules/audio_processing/utility/delay_estimator_wrapper.h"
@@ -1653,3 +1656,5 @@ static void ComfortNoise(AecmCore* aecm,
 }
 
 }  // namespace webrtc
+
+#endif

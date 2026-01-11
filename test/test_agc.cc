@@ -16,7 +16,7 @@ int main(int argc, char **argv)
     std::cout<< "read samples: " << wav_reader.num_samples() << std::endl;
 
     WavWriter wav_writer(
-        "data/voice_engine/audio_short16_vad_out.wav", 
+        "data/voice_engine/audio_short16_agc_out.wav", 
         wav_reader.sample_rate(),
         wav_reader.num_channels(), 
         WavFile::SampleFormat::kInt16
@@ -33,7 +33,18 @@ int main(int argc, char **argv)
     {
         int read_samples = wav_reader.ReadSamples(FRAME_LEN, wav_data);
         ArrayView<int16_t> input(wav_data);
+        for(int i = 0; i < read_samples; i++)
+        {
+            printf("%d ", input[i]);
+        }
+        printf("\n");
         agc.Process(input);
+        for(int i = 0; i < read_samples; i++)
+        {
+            printf("%d ", input[i]);
+        }
+        printf("\n");
+        exit(0);
         std::copy(input.begin(), input.end(), wav_data);
         wav_writer.WriteSamples(wav_data, read_samples);
 

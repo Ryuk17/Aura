@@ -8,6 +8,8 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+
 #include <arm_neon.h>
 
 #include "common_audio/signal_processing/include/signal_processing_library.h"
@@ -83,3 +85,6 @@ void WebRtcSpl_CrossCorrelationNeon(int32_t* cross_correlation,
     cross_correlation++;
   }
 }
+
+
+#endif

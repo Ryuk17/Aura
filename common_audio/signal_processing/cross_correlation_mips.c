@@ -8,6 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#if defined(__mips__) && (defined(MIPS_DSP_R1_LE) || defined(MIPS_DSP_R2_LE))
 #include "common_audio/signal_processing/include/signal_processing_library.h"
 
 void WebRtcSpl_CrossCorrelation_mips(int32_t* cross_correlation,
@@ -100,3 +101,4 @@ void WebRtcSpl_CrossCorrelation_mips(int32_t* cross_correlation,
       : [dim_seq] "r"(dim_seq), [right_shifts] "r"(right_shifts)
       : "hi", "lo", "memory");
 }
+#endif

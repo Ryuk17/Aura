@@ -8,6 +8,8 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#if defined(__mips__) && (defined(MIPS_DSP_R1_LE) || defined(MIPS_DSP_R2_LE))
+
 #include "common_audio/signal_processing/include/signal_processing_library.h"
 
 static int16_t coefTable_7[] = {
@@ -151,3 +153,5 @@ void WebRtcSpl_ComplexBitReverse(int16_t frfi[], int stages) {
         : "memory");
   }
 }
+
+#endif

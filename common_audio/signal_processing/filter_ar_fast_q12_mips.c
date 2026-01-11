@@ -8,6 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#if defined(__mips__) && (defined(MIPS_DSP_R1_LE) || defined(MIPS_DSP_R2_LE))
 #include "common_audio/signal_processing/include/signal_processing_library.h"
 #include "rtc_base/checks.h"
 
@@ -135,3 +136,4 @@ void WebRtcSpl_FilterARFastQ12(const int16_t* data_in,
         [data_out] "r"(data_out), [data_in] "r"(data_in)
       : "hi", "lo", "memory");
 }
+#endif

@@ -8,6 +8,8 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+
 #include "common_audio/fir_filter_neon.h"
 
 #include <arm_neon.h>
@@ -71,3 +73,5 @@ void FIRFilterNEON::Filter(const float* in, size_t length, float* out) {
 }
 
 }  // namespace webrtc
+
+#endif
