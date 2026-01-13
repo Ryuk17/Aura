@@ -13,7 +13,7 @@
  *
  * Based on the sse2 version.
  */
-
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
 #include <arm_neon.h>
 
 #include "common_audio/third_party/ooura/fft_size_128/ooura_fft.h"
@@ -349,3 +349,5 @@ void rftbsub_128_neon(float* a) {
 #endif
 
 }  // namespace webrtc
+
+#endif

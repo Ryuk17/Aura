@@ -1,6 +1,7 @@
 #include <iostream>
 #include "common_audio/wav_file.h"
-#include "modules/audio_processing/aecm/echo_control_mobile.h"
+#include "modules/audio_processing/aec3/echo_canceller3.h"
+#include "api/environment/environment_factory.h"
 
 #define FRAME_LEN (160)
 
@@ -10,8 +11,6 @@ int main(int argc, char **argv)
 {
     char farend_file[1024] = "data/voice_engine/audio_farend16k.wav";
     char nearend_file[1024] = "data/voice_engine/audio_nearend16k.wav";
-
-
 
     WavReader farend_wav_reader(farend_file);
     WavReader nearend_wav_reader(nearend_file);
@@ -31,48 +30,42 @@ int main(int argc, char **argv)
     );
 
     int ret = 0;
-    void* aecmInst = WebRtcAecm_Create();
-    ret = WebRtcAecm_Init(aecmInst, farend_wav_reader.sample_rate());
-    if (ret != 0)
-    {
-        std::cout<< "WebRtcAecm_Init error: " << ret << std::endl;
-    }else
-    {
-        std::cout<< "WebRtcAecm_Init success" << std::endl;
-    }
-
-    AecmConfig config;
-    config.cngMode = 1;
-    config.echoMode = 3;
-    ret = WebRtcAecm_set_config(aecmInst, config);
-    if (ret != 0)
-    {
-        std::cout<< "WebRtcAecm_set_config error: " << ret << std::endl;
-    }else
-    {
-        std::cout<< "WebRtcAecm_set_config success" << std::endl;
-    }
+    EchoCanceller3 aec3(CreateEnvironment(), EchoCanceller3Config(),
+                        /*multichannel_config=*/std::nullopt,
+                        /*neural_residual_echo_estimator=*/nullptr,
+                        farend_wav_reader.sample_rate(), 1, 1);
 
     int total_samples = 0;
     int16_t farend_wav_data[FRAME_LEN];
     int16_t nearend_wav_data[FRAME_LEN];
     int16_t out_wav_data[FRAME_LEN];
+
+    auto rate = farend_wav_reader.sample_rate();
+    auto num_channels = farend_wav_reader.num_channels();
+
+    StreamConfig stream_config(rate, num_channels);
+    AudioBuffer capture_buffer(rate, num_channels, rate, num_channels, rate, num_channels);
+    AudioBuffer render_buffer(rate, num_channels, rate, num_channels, rate, num_channels);
+
     while(true) 
     {
         int farend_read_samples = farend_wav_reader.ReadSamples(FRAME_LEN, farend_wav_data);
         int nearend_read_samples = nearend_wav_reader.ReadSamples(FRAME_LEN, nearend_wav_data);
+        
+        aec3.AnalyzeCapture(&capture_buffer);
 
-        ret = WebRtcAecm_BufferFarend(aecmInst, farend_wav_data, farend_read_samples);
-        if (ret != 0)
+        render_buffer.CopyFrom(farend_wav_data, stream_config);
+        capture_buffer.CopyFrom(nearend_wav_data, stream_config);
+        if (rate > 16000) 
         {
-            std::cout<< "WebRtcAecm_BufferFarend error: " << ret << std::endl;
+            render_buffer.SplitIntoFrequencyBands();
+            capture_buffer.SplitIntoFrequencyBands();
         }
 
-        ret = WebRtcAecm_Process(aecmInst, nearend_wav_data, nullptr, out_wav_data, farend_read_samples, 0);
-        if (ret != 0)
-        {
-            std::cout<< "WebRtcAecm_Process error: " << ret << std::endl;
-        }
+        aec3.AnalyzeRender(&render_buffer);
+        aec3.ProcessCapture(&capture_buffer, false);
+
+        capture_buffer.CopyTo(stream_config, out_wav_data);
 
         wav_writer.WriteSamples(out_wav_data, farend_read_samples);
         total_samples += farend_read_samples;
