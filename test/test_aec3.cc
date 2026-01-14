@@ -23,7 +23,7 @@ int main(int argc, char **argv)
 
 
     WavWriter wav_writer(
-        "data/voice_engine/audio_nearend16k_aecm_out.wav", 
+        "data/voice_engine/audio_nearend16k_aec3_out.wav", 
         farend_wav_reader.sample_rate(),
         farend_wav_reader.num_channels(), 
         WavFile::SampleFormat::kInt16
