@@ -29,8 +29,8 @@ option(BUILD_TEST_WAVE_IO "Whether to build wav io unitest" OFF)
 option(BUILD_TEST_ANR "Whether to build anr unitest" OFF)
 option(BUILD_TEST_VAD "Whether to build vad unitest" OFF)
 option(BUILD_TEST_AECM "Whether to build aecm unitest" OFF)
-option(BUILD_TEST_AEC3 "Whether to build aec3 unitest" ON)
-option(BUILD_TEST_AGC "Whether to build agc unitest" OFF)
+option(BUILD_TEST_AEC3 "Whether to build aec3 unitest" OFF)
+option(BUILD_TEST_AGC_LEGACY "Whether to build agc_legacy unitest" ON)
 
 
 if(BUILD_TEST_WAVE_IO)
@@ -59,9 +59,10 @@ if(BUILD_TEST_AEC3)
     add_aec3_test_module()
 endif()
 
-if(BUILD_TEST_AGC)
-    include(cmake/test_agc.cmake)
-    add_agc_test_module()
+
+if(BUILD_TEST_AGC_LEGACY)
+    include(cmake/test_agc_legacy.cmake)
+    add_agc_legacy_test_module()
 endif()
 
 

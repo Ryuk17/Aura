@@ -32,7 +32,7 @@ int main(int argc, char **argv)
         return -1;
     }
     
-    WebRtcAgcConfig config
+    WebRtcAgcConfig config;
     config.compressionGaindB = 9,
     config.limiterEnable = 1,
     config.targetLevelDbfs = 3;

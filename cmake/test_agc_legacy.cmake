@@ -1,5 +1,5 @@
-function(add_agc_test_module)
-    set(LIB_NAME "agc")
+function(add_agc_legacy_test_module)
+    set(LIB_NAME "agc_legacy")
     add_definitions(-DWEBRTC_APM_DEBUG_DUMP=0)
 
     add_library(${LIB_NAME} STATIC 
@@ -17,6 +17,9 @@ function(add_agc_test_module)
         "${PROJECT_SOURCE_DIR}/common_audio/signal_processing/splitting_filter.c"
         "${PROJECT_SOURCE_DIR}/common_audio/signal_processing/division_operations.c"
         "${PROJECT_SOURCE_DIR}/common_audio/signal_processing/get_scaling_square.c"
+        "${PROJECT_SOURCE_DIR}/common_audio/signal_processing/dot_product_with_scale.cc"
+        "${PROJECT_SOURCE_DIR}/common_audio/signal_processing/copy_set_operations.c"
+        "${PROJECT_SOURCE_DIR}/common_audio/signal_processing/spl_sqrt.c"
         "${PROJECT_SOURCE_DIR}/common_audio/third_party/ooura/fft_size_256/fft4g.cc"
 
         "${PROJECT_SOURCE_DIR}/rtc_base/checks.cc"
@@ -35,17 +38,11 @@ function(add_agc_test_module)
         "${PROJECT_SOURCE_DIR}/system_wrappers/source/clock.cc"
     )
 
-    file(GLOB AGC_SRC "${PROJECT_SOURCE_DIR}/modules/audio_processing/agc/*.cc")
-    file(GLOB VAD_SRC "${PROJECT_SOURCE_DIR}/modules/audio_processing/vad/*.cc")
-    file(GLOB RTC_VAD_SRC "${PROJECT_SOURCE_DIR}/common_audio/vad/*.c")
-    file(GLOB ISAC_VAD_SRC "${PROJECT_SOURCE_DIR}/modules/audio_coding/codecs/isac/main/source/*.c")
+    file(GLOB AGC_SRC "${PROJECT_SOURCE_DIR}/modules/audio_processing/agc/legacy/*.cc")
     file(GLOB RESAMPLE_SRC "${PROJECT_SOURCE_DIR}/common_audio/resampler/*.cc")
 
     target_sources(${LIB_NAME} PRIVATE 
         ${AGC_SRC}
-        ${VAD_SRC}
-        ${RTC_VAD_SRC}
-        ${ISAC_VAD_SRC}
         ${RESAMPLE_SRC}
     )
 
@@ -59,9 +56,9 @@ function(add_agc_test_module)
     )
 
     # --- 2. 定义测试可执行程序 ---
-    set(TEST_NAME "test_agc")
+    set(TEST_NAME "test_agc_legacy")
     
-    add_executable(${TEST_NAME} "${PROJECT_SOURCE_DIR}/test/test_agc.cc")
+    add_executable(${TEST_NAME} "${PROJECT_SOURCE_DIR}/test/test_agc_legacy.cc")
 
 
     if(WIN32)
