@@ -1,68 +1,38 @@
-# 设置最低版本要求
-cmake_minimum_required(VERSION 3.10.0)
+# Aura Voice Agent — 端侧语音助手（Raspberry Pi / Windows 开发机）
+# 构建方式：
+#   Windows (MinGW):  cmake -B build -G "MinGW Makefiles"
+#   RPi (aarch64):    cmake -B build -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=toolchains/aarch64-linux-gnu.toolchain.cmake
 
-# 设置项目名称
-project(AuarProject)
+cmake_minimum_required(VERSION 3.16)
+project(Aura VERSION 0.1.0 LANGUAGES C CXX)
 
-if(CMAKE_TOOLCHAIN_FILE)
-    get_filename_component(CMAKE_TOOLCHAIN_FILE_NAME ${CMAKE_TOOLCHAIN_FILE} NAME)
-    find_file(CMAKE_TOOLCHAIN_FILE ${CMAKE_TOOLCHAIN_FILE_NAME} PATHS ${CMAKE_SOURCE_DIR} NO_DEFAULT_PATH)
-    message(STATUS "CMAKE_TOOLCHAIN_FILE = ${CMAKE_TOOLCHAIN_FILE}")
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 11)
+
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# 设置 C++ 标准
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
+# 对外公共头文件目录（include/aura/...）
+add_library(aura_interfaces INTERFACE)
+target_include_directories(aura_interfaces INTERFACE ${PROJECT_SOURCE_DIR}/include)
+# 全链路统一音频参数：16 kHz / 16 bit / mono
+target_compile_definitions(aura_interfaces INTERFACE
+    AURA_SAMPLE_RATE=16000
+    AURA_CHANNELS=1
+    AURA_BITS_PER_SAMPLE=16)
 
-set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
-set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
+# 第三方库
+add_subdirectory(third_party/aecm)
 
-set(CMAKE_VERBOSE_MAKEFILE ON)
-set(CMAKE_PREFIX_PATH 
-    "${PROJECT_SOURCE_DIR}/third_libs/abseil-cpp/install" 
-    ${CMAKE_PREFIX_PATH}
-)
+# 核心模块
+add_subdirectory(src/utils)
+add_subdirectory(src/core)
+add_subdirectory(src/platform)
+add_subdirectory(src/audio)
 
-find_package(absl REQUIRED)
-
-option(BUILD_TEST_WAVE_IO "Whether to build wav io unitest" OFF)
-option(BUILD_TEST_ANR "Whether to build anr unitest" OFF)
-option(BUILD_TEST_VAD "Whether to build vad unitest" OFF)
-option(BUILD_TEST_AECM "Whether to build aecm unitest" OFF)
-option(BUILD_TEST_AEC3 "Whether to build aec3 unitest" OFF)
-option(BUILD_TEST_AGC_LEGACY "Whether to build agc_legacy unitest" ON)
-
-
-if(BUILD_TEST_WAVE_IO)
-    include(cmake/test_wav_io.cmake)
-    add_wav_io_test_module()
-endif()
-
-if(BUILD_TEST_ANR)
-    include(cmake/test_anr.cmake)
-    add_anr_test_module()
-endif()
-
-if(BUILD_TEST_VAD)
-    include(cmake/test_vad.cmake)
-    add_vad_test_module()
-endif()
-
-if(BUILD_TEST_AECM)
-    include(cmake/test_aecm.cmake)
-    add_aecm_test_module()
-endif()
-
-
-if(BUILD_TEST_AEC3)
-    include(cmake/test_aec3.cmake)
-    add_aec3_test_module()
-endif()
-
-
-if(BUILD_TEST_AGC_LEGACY)
-    include(cmake/test_agc_legacy.cmake)
-    add_agc_legacy_test_module()
-endif()
-
-
+# 测试与示例
+enable_testing()
+add_subdirectory(tests)
+add_subdirectory(examples)
