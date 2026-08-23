@@ -1,7 +1,7 @@
 # Aura Voice Agent 架构设计
 
-> 状态：**已定案 v0.2**（基于决策点 review 结果更新）
-> 目标平台：Raspberry Pi（aarch64）/ 开发机（x86_64-windows）
+> 状态：**已定案 v0.3**（v0.3 变更：音频算法层由 AECM 扩充为 TrickRoom audio_engine 全量算法链，见 [audio_engine_integration.md](audio_engine_integration.md)）
+> 目标平台：Raspberry Pi（aarch64）/ 开发机（x86_64-linux 先行，x86_64-windows 保留）
 > 推理后端：**MNN**（统一）
 > 备注：树莓派算力有限，当前阶段以**评估 + 原型验证**为主，后续可能加算力卡（架构预留扩展点，不为此特殊设计）
 
@@ -28,7 +28,7 @@ Aura 是一个跑在树莓派上的端侧 voice agent：常驻监听唤醒词，
 3. **模块间只经事件总线通信**：模块无直接依赖，通过 `core/` 定义的消息类型解耦，便于单模块替换与测试。
 4. **流式贯穿**：ASR 流式增量、LLM 流式输出、TTS 流式播放，全链路无"整句等待"。
 5. **打断优先（Barge-in）**：TTS 播放期间用户说话必须立即打断，是全链路延迟的最高优先级约束。
-6. **双平台开发**：开发期在 x86_64-windows 跑通全链路，交叉编译部署到 RPi。
+6. **多平台开发**：开发期在 x86_64-linux 跑通全链路（决策 D13），随后验证 x86_64-windows 与 RPi 交叉编译。
 
 ---
 
@@ -43,7 +43,7 @@ Aura 是一个跑在树莓派上的端侧 voice agent：常驻监听唤醒词，
                            │              │              │
         ┌──────────────────▼───┐   ┌──────▼──────┐   ┌───▼────────────┐
         │  audio/ 音频 I/O      │   │  memory/     │   │  knowledge/    │
-        │  采集/播放/AECM/焦点  │   │  md 记忆      │   │  md 文档 RAG   │
+        │ 采集/播放/算法链/焦点 │   │  md 记忆      │   │  md 文档 RAG   │
         └──────▲───────────────┘   └─────────────┘   └────────────────┘
                │
 ┌──────────────┴──────────────────────────────────────────────────┐
@@ -132,14 +132,23 @@ enum class EventType {
 
 - `IAudioSource`：麦克风采集，ALSA（RPi）/ WASAPI（Windows），回调式输出 16 kHz / 16 bit / mono（全链路统一采样率，与 AECM 帧长 80/160 样本对齐）。
 - `IAudioSink`：播放，TTS PCM 块入队即播，支持 `Stop()`（barge-in 用）。
-- **回声消除（AECM）**（决策 D5）：复用 TrickRoom 仓库的 WebRTC AECM 移植（`src/audio_engine/audio_processing/acoustic_echo_cancellation_mobile/`，C API `WebRtcAecm_Create/Init/BufferFarend/Process`，已有 CMake 集成产 `libAE_AECM`）。TTS 播放的 PCM 同时送入 `BufferFarend`，麦克风采集经 `Process` 消回声后输出。AECM 16 kHz 帧处理与全链路采样率天然对齐。
-- `AudioFocus`：管理播放与采集的互斥（barge-in 时 sink 立即停、source 继续采）。
+- **AudioChain 算法链**（决策 D11）：整体引入 TrickRoom `audio_engine`（12 个 `libAE_*` 库，统一 C API + 状态码，全量编译，见 [audio_engine_integration.md](audio_engine_integration.md)）。Aura 侧以**配置驱动的节点链**按需挂载，节点可插拔、可排序：
+
+  ```
+  采集帧 ──► [SRC 重采样] ──► [AGC2 增益] ──► [NS 降噪] ──► [AECM 回声消除] ──► AudioChunk 事件
+  播放帧（TTS）───────────────────────────────────────────► farend 延迟线（送入 AECM）
+  ```
+
+  - 默认链：AECM（基础，决策 D5）＋ NS/SRC/AGC2/VAD（M2 起按需启用）。
+  - 储备节点（接口统一，按需点亮）：AEC(AEC3)（高算力平台升级选项）、HS 啸叫抑制、BF 波束形成（多麦阵列）、DR 去混响（需 Eigen）、TS 瞬态抑制、IE 可懂度增强、AGC legacy。
+  - 常驻功耗约束：IDLE 态仅挂载 VAD 类低开销节点，NS/AEC 等按状态迁移挂载/摘除。
+- `AudioFocus`：管理播放与采集的互斥（barge-in 时 sink 立即停、source 继续采）；播放/采集音量归一化由链上 AGC2 节点落地。
 
 ### 5.2 vad/ — 语音活动检测与轮次检测
 
 - 常驻运行，CPU 占用最小，播放阶段继续运行以支持 barge-in。
 - **两种模式可配置切换**（决策 D4-其他2）：
-  - `TURN_DETECTOR_VAD`（默认）：sherpa-mnn 内置 silero-vad 模型（MNN 格式，随 sherpa-mnn 框架提供）。
+  - `TURN_DETECTOR_VAD`（默认）：sherpa-mnn 内置 silero-vad 模型（MNN 格式，随 sherpa-mnn 框架提供）。可选补充：audio_engine 的 libAE_VAD（WebRTC VAD，零模型开销），用作 silero 的前置预检或低功耗降级备选。
   - `TURN_DETECTOR_SMART`：pipecat-ai 的 smart-turn-v3 轮次检测模型（对话级判断"用户是否说完/是否期望回复"）。
 - ⚠️ **待验证项**：smart-turn-v3 官方发布为 ONNX 格式，若需 MNN 运行需要转换或验证 MNN 兼容性——与"不做模型转换"原则冲突，M2 阶段验证，验证不过则 VAD 模式为唯一实现。
 - 输出：`SpeechStart`、`SpeechEnd`。
@@ -149,7 +158,7 @@ enum class EventType {
 
 - 基于 MNN 官方 `apps/frameworks/sherpa-mnn` 框架，封装为 `IASR`：`FeedAudio(const AudioFrame&)` → 回调 `AsrPartial` / `AsrFinal`。
 - 模型：**sherpa-mnn-streaming-zipformer-bilingual-zh-en-2023-02-20**（taobao-mnn 发布，`sherpa-mnn-streaming-zipformer-bilingual-zh-en-2023-02-20`，流式中英双语）。
-- 输入为 AECM 处理后的音频，不做二次降噪。
+- 输入为 audio 算法链输出（AECM 消回声后；NS 降噪节点按配置可选启用，嘈杂环境建议开启）。
 
 ### 5.4 llm/ — LLM 推理（MNN-LLM）
 
@@ -168,7 +177,7 @@ enum class EventType {
 
 - 基于 [wangzhaode/mnn-tts](https://github.com/wangzhaode/mnn-tts)（MNN 系 TTS），封装为 `ITTS`：`Synthesize(text)` → 回调 `TtsChunk`（16 kHz PCM）；支持 `Abort()`（barge-in）。
 - 约束：首字延迟 < 300 ms、流式合成（逐句/逐 chunk 生成，不等整段）、内存 < 150 MB。
-- 语速/音量由 AudioFocus 统一控制。
+- 语速由 AudioFocus 统一控制；音量归一化由 audio 链上 AGC2 节点落地。
 
 ### 5.7 tools/ — 工具调用（Function Calling）
 
@@ -304,11 +313,11 @@ Orchestrator ─► tools: 查表执行（超时 3s）─► LlmToolResult("ok")
 
 ## 10. 构建与部署
 
-- CMake 单工程；`toolchains/` 已有 aarch64 / armhf / x86_64-windows 三份工具链文件，直接复用。
-- 依赖：**MNN**（必选，交叉编译 aarch64 需开启 `MNN_BUILD_LLM` 等选项）、**sherpa-mnn**（ASR/VAD）、**mnn-tts**（TTS）、**AECM**（复用 TrickRoom `libAE_AECM`，以 submodule 或源码引入）、驱动库按平台（ALSA/WASAPI）。
-- 目录约定：`third_party/` 内嵌依赖源码；`scripts/` 固化交叉编译、打包、刷机（SD 卡镜像）脚本。
-- 产物：`build/x86_64-windows/`（开发）与 `build/aarch64-linux/`（RPi），互不影响。
-- 资源路径：模型/配置/md 知识库从 `models/` 与 `resources/` 统一打包，运行时经 `utils/Config` 解析相对路径（可移植）。
+- CMake 单工程；`toolchains/` 已有四份工具链文件：`linux-x86_64.cmake`（开发机，**先行**）、`windows-x86_64.cmake`（MinGW）、`aarch64-linux-gnu.toolchain.cmake`（RPi）、`arm-linux-gnueabihf.toolchain.cmake`，直接复用。
+- 依赖：**MNN**（必选，交叉编译 aarch64 需开启 `MNN_BUILD_LLM` 等选项）、**sherpa-mnn**（ASR/VAD）、**mnn-tts**（TTS）、**audio_engine**（TrickRoom，12 个 `libAE_*` 全量引入，决策 D11）、驱动库按平台（ALSA/WASAPI）。
+- 第三方依赖管理（决策 D12）：**`third_party/` 只放第三方代码，全部 git submodule**（trickroom、neon-fft、pffft、eigen、abseil-cpp），`git clone --recursive` 即可复现环境；对上游的最小 CMake 改动经 `patches/` + `scripts/apply_patches.sh` 维护（详见 [audio_engine_integration.md](audio_engine_integration.md)）。
+- 产物：`build/` 下按平台分目录（开发机先行 `build/linux-x86_64/`），互不影响。
+- 资源路径：模型/配置/md 知识库从 `models/` 与 `resources/` 统一打包（golden 音频样本在 `resources/audio_engine/data/`），运行时经 `utils/Config` 解析相对路径（可移植）。
 
 ---
 
@@ -339,12 +348,15 @@ Orchestrator ─► tools: 查表执行（超时 3s）─► LlmToolResult("ok")
 | 其他2 | 模型转换 | ✅ 不做，直接用 MNN 模型 |
 | 其他3 | 算力演进 | RPi 评估阶段，后续加算力卡，MNN 换后端即可，架构不变 |
 | D10 | 唤醒词 | ✅ 占位：`IWakeWord` 接口 + 事件保留，v0 不加载模型，语音起始即唤醒；词唤醒延后 |
+| D11 | 音频算法库 | ✅ 全量引入 TrickRoom `audio_engine`（12 个 `libAE_*` 全编译，含 AEC3/DR 等储备）；Aura 侧 AudioChain 配置驱动节点链按需挂载；golden wav 入 `resources/audio_engine/data/` |
+| D12 | 第三方依赖管理 | ✅ `third_party/` 只放第三方、全部 git submodule（trickroom/neon-fft/pffft/eigen/abseil-cpp），`--recursive` 复现环境；上游最小改动走 `patches/` 补丁脚本 |
+| D13 | 开发平台 | ✅ x86_64-linux（`linux-x86_64.cmake`）先行验证全量编译，aarch64-linux / x86_64-windows（MinGW）随后 |
 
 ---
 
 ## 13. 里程碑建议
 
-1. **M1 骨架**：CMake 工程 + 事件总线 + 状态机 + 音频采集播放（WASAPI/ALSA）+ AECM 接入 + 日志配置，双平台可编译运行
+1. **M1 骨架**：CMake 工程 + 事件总线 + 状态机 + 音频采集播放（WASAPI/ALSA）+ audio_engine 全量引入 + AudioChain/AECM 接入 + 日志配置，多平台可编译运行
 2. **M2 语音链路**：sherpa-mnn（VAD + 流式 ASR）→ 文本进文本出（控制台显示）；验证 smart-turn-v3 MNN 兼容性
 3. **M3 对话链路**：MNN-LLM（Qwen3.5-0.8B-MNN）+ dialogue + memory(md) → 文本回复
 4. **M4 语音闭环**：mnn-tts + barge-in → 全语音对话
