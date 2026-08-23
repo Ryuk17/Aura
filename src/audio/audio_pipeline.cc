@@ -1,9 +1,12 @@
+// AudioPipeline 实现：AudioChain（默认 AECM 节点）+ 事件总线装配
 #include "audio_pipeline.h"
 
+#include "aecm_node.h"
 #include "aura/core/events.h"
 #include "log.h"
 
 #include <algorithm>
+#include <vector>
 
 namespace aura {
 
@@ -24,19 +27,21 @@ bool AudioPipeline::Start(std::unique_ptr<IAudioSource> source,
     source_ = std::move(source);
     sink_ = std::move(sink);
 
+    // 默认链：AECM（无节点配置时）；链路初始化失败不阻塞（降级直通）
+    if (chain_.size() == 0) {
+        auto aecm = std::make_unique<audio::AecmNode>();
+        if (!aecm->Init(16000)) {
+            ALOG_WARN(kTag, "AECM init failed, running without echo cancellation");
+        }
+        chain_.AddNode(std::move(aecm));
+    }
+    aecm_ = dynamic_cast<audio::AecmNode*>(chain_.Find("aecm"));
+    chain_.Init(16000);
+
     if (!sink_->Start()) {
         ALOG_ERROR(kTag, "audio sink start failed");
         return false;
     }
-
-    // AECM 初始化失败不阻塞链路（关闭 AEC 继续跑）
-    if (aec_enabled_) {
-        if (!aecm_.Init(16000)) {
-            ALOG_WARN(kTag, "AECM init failed, running without echo cancellation");
-            aec_enabled_ = false;
-        }
-    }
-
     if (!source_->Start(
             [this](const int16_t* data, size_t frames) { OnCapture(data, frames); })) {
         ALOG_ERROR(kTag, "audio source start failed");
@@ -44,17 +49,15 @@ bool AudioPipeline::Start(std::unique_ptr<IAudioSource> source,
         return false;
     }
 
-    ALOG_INFO(kTag, "pipeline started (aec=%s)", aec_enabled_ ? "on" : "off");
+    focus_.OnBargeIn();  // 初始无播放，处于采集态
+    ALOG_INFO(kTag, "pipeline started (chain=%zu nodes, aecm=%s)", chain_.size(),
+              aecm_ ? "on" : "off");
     return true;
 }
 
 void AudioPipeline::Stop() {
     if (source_) source_->Stop();
     if (sink_) sink_->Stop();
-    {
-        std::lock_guard<std::mutex> lock(farend_mutex_);
-        farend_.clear();
-    }
     ALOG_INFO(kTag, "pipeline stopped");
 }
 
@@ -63,51 +66,32 @@ void AudioPipeline::Play(const int16_t* data, size_t frames) {
     sink_->Push(data, frames);
     played_frames_.fetch_add(frames);
 
-    // 写入 farend 延迟线（上限内丢弃最旧）
-    std::lock_guard<std::mutex> lock(farend_mutex_);
-    if (farend_.size() + frames > kFarendMaxSamples) {
-        size_t drop = farend_.size() + frames - kFarendMaxSamples;
-        farend_.erase(farend_.begin(), farend_.begin() + drop);
-    }
-    farend_.insert(farend_.end(), data, data + frames);
+    // 播放信号注入链内 AECM 的 farend 延迟线
+    if (aecm_) aecm_->FeedFarend(data, frames);
 }
 
 void AudioPipeline::StopPlayback() {
     if (sink_) sink_->Clear();
-    // 延迟线保留：播放卡内仍有缓冲，AECM 延迟估计覆盖
-}
-
-bool AudioPipeline::TakeFarendFrame(int16_t out[160]) {
-    std::lock_guard<std::mutex> lock(farend_mutex_);
-    if (farend_.size() < 160) return false;
-    std::copy_n(farend_.begin(), 160, out);
-    farend_.erase(farend_.begin(), farend_.begin() + 160);
-    return true;
+    focus_.OnBargeIn();
 }
 
 void AudioPipeline::OnCapture(const int16_t* data, size_t frames) {
     if (frames == 0) return;
     captured_frames_.fetch_add(frames);
 
-    // 帧对齐：WASAPI 可能返回非 160 的块（共享模式转换后通常 160），逐帧处理
-    std::vector<int16_t> output;
-    output.reserve(frames);
-
-    if (aec_enabled_ && aecm_.initialized() && frames == 160) {
-        int16_t farend[160];
-        int16_t out[160];
-        bool has_farend = TakeFarendFrame(farend);
-        aecm_.ProcessFrame(has_farend ? farend : nullptr, data, out);
-        output.insert(output.end(), out, out + 160);
-    } else {
-        // AEC 关闭或非标准帧长：直通
-        output.insert(output.end(), data, data + frames);
+    std::vector<int16_t> output(frames);
+    size_t got = chain_.Process(data, frames, output.data(), output.size());
+    if (got == 0 || got > output.size()) {
+        // 处理异常：直通兜底
+        std::copy_n(data, frames, output.data());
+        got = frames;
     }
+    output.resize(got);
 
     auto samples = std::make_shared<const std::vector<int16_t>>(std::move(output));
     uint64_t now = Log::NowMs();
     bus_.Publish(Event::MakeAudioChunk(
-        samples, now, static_cast<uint64_t>(frames) * 1000 / 16000));
+        samples, now, static_cast<uint64_t>(frames) * 1000 / AURA_SAMPLE_RATE));
 }
 
 }  // namespace aura
