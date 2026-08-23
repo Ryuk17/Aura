@@ -1,9 +1,9 @@
-// M1 集成 demo：音频采集 → AECM 回声消除 → 事件总线 → 回环播放
+// M1 集成 demo：音频采集 → AudioChain(AECM 回声消除) → 事件总线 → 回环播放
 // 运行 10 秒自动退出；麦克风声音经管线从扬声器播出（可感知回声消除效果）
 //
 // 链路验证：
-//   采集线程 ─► AudioPipeline::OnCapture ─► AECM ─► Publish(AudioChunk)
-//   总线订阅者 ─► AudioPipeline::Play ─► 播放设备 + farend 延迟线
+//   采集线程 ─► AudioPipeline::OnCapture ─► AudioChain[AECM] ─► Publish(AudioChunk)
+//   总线订阅者 ─► AudioPipeline::Play ─► 播放设备 + 链内 farend 注入
 //   Orchestrator 状态机同步运行（M1 无 VAD，状态保持在 Idle）
 #include "aura/core/events.h"
 #include "aura/platform/audio_device.h"
