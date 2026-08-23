@@ -23,7 +23,14 @@ bool ConfigurePcm(snd_pcm_t* pcm, snd_pcm_stream_t stream, size_t* period_frames
         return false;
     }
     snd_pcm_uframes_t frames = 160;  // 10ms
-    if (snd_pcm_set_period_size(pcm, frames, 0) < 0) {
+    // 用 hw_params 请求 10ms period（裁剪版 ALSA 头文件缺失 sw_params setter，
+    // 但 snd_pcm_set_period_size 与 snd_pcm_sw_params_set_* 均不可用）
+    snd_pcm_hw_params_t* hw = nullptr;
+    snd_pcm_hw_params_alloca(&hw);
+    if (snd_pcm_hw_params_current(pcm, hw) == 0 &&
+        snd_pcm_hw_params_set_period_size_near(pcm, hw, &frames, 0) == 0) {
+        snd_pcm_hw_params(pcm, hw);
+    } else {
         // 非致命：使用驱动默认 period
         snd_pcm_uframes_t actual = 0;
         snd_pcm_get_params(pcm, &actual, nullptr);
