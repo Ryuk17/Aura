@@ -1,0 +1,156 @@
+diff --git a/src/audio_engine/CMakeLists.txt b/src/audio_engine/CMakeLists.txt
+index 18e8e13..cb59a6e 100644
+--- a/src/audio_engine/CMakeLists.txt
++++ b/src/audio_engine/CMakeLists.txt
+@@ -4,9 +4,7 @@ cmake_minimum_required(VERSION 3.10.0)
+ # 设置项目名称
+ project(AuarProject)
+ 
+-if(CMAKE_TOOLCHAIN_FILE)
+-    get_filename_component(CMAKE_TOOLCHAIN_FILE_NAME ${CMAKE_TOOLCHAIN_FILE} NAME)
+-    find_file(CMAKE_TOOLCHAIN_FILE ${CMAKE_TOOLCHAIN_FILE_NAME} PATHS ${CMAKE_SOURCE_DIR} NO_DEFAULT_PATH)
++if(CMAKE_TOOLCHAIN_FILE AND EXISTS ${CMAKE_TOOLCHAIN_FILE})
+     message(STATUS "CMAKE_TOOLCHAIN_FILE = ${CMAKE_TOOLCHAIN_FILE}")
+ endif()
+ 
+@@ -14,11 +12,13 @@ endif()
+ set(CMAKE_CXX_STANDARD 20)
+ set(CMAKE_CXX_STANDARD_REQUIRED True)
+ 
+-set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
+-set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
++set(LIBRARY_OUTPUT_PATH ${CMAKE_BINARY_DIR}/lib)
++set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR}/bin)
+ 
+ # Third-party dependencies (submodules) live at the repository root
+-set(THIRD_PARTY_ROOT "${PROJECT_SOURCE_DIR}/../../third_party")
++if(NOT DEFINED THIRD_PARTY_ROOT)
++    set(THIRD_PARTY_ROOT "${PROJECT_SOURCE_DIR}/../../third_party")
++endif()
+ 
+ set(CMAKE_VERBOSE_MAKEFILE ON)
+ set(CMAKE_PREFIX_PATH
+@@ -181,7 +181,7 @@ if(BUILD_AE_VAD)
+     )
+     target_link_libraries(AE_VAD PUBLIC absl::strings)
+     target_compile_definitions(AE_VAD PRIVATE AUDIO_ENGINE_EXPORTS)
+-    set_target_properties(AE_VAD PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
++    set_target_properties(AE_VAD PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ 
+     add_ae_test(test_ae_vad "test_ae_vad.cc" AE_VAD)
+ endif()
+@@ -211,7 +211,7 @@ if(BUILD_AE_SRC)
+     )
+     target_link_libraries(AE_SRC PUBLIC absl::strings)
+     target_compile_definitions(AE_SRC PRIVATE AUDIO_ENGINE_EXPORTS)
+-    set_target_properties(AE_SRC PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
++    set_target_properties(AE_SRC PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ 
+     add_ae_test(test_ae_src "test_ae_src.cc" AE_SRC)
+ endif()
+@@ -240,7 +240,7 @@ if(BUILD_AE_NS)
+     )
+     target_link_libraries(AE_NS PUBLIC absl::strings)
+     target_compile_definitions(AE_NS PRIVATE AUDIO_ENGINE_EXPORTS)
+-    set_target_properties(AE_NS PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
++    set_target_properties(AE_NS PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ 
+     add_ae_test(test_ae_ns "test_ae_ns.cc" AE_NS)
+ endif()
+@@ -262,7 +262,7 @@ if(BUILD_AE_AGC)
+     target_include_directories(AE_AGC PUBLIC ${LIB_COMMON_INCLUDES})
+     target_link_libraries(AE_AGC PUBLIC absl::strings)
+     target_compile_definitions(AE_AGC PRIVATE AUDIO_ENGINE_EXPORTS)
+-    set_target_properties(AE_AGC PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
++    set_target_properties(AE_AGC PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ 
+     add_ae_test(test_ae_agc "test_ae_agc.cc" AE_AGC)
+ endif()
+@@ -281,8 +281,8 @@ if(BUILD_AE_AGC2)
+         ${UTILS_AUDIO_BUFFER_AND_SPLITTING}
+         "${PROJECT_SOURCE_DIR}/model_weights/rnnoise/src/rnn_vad_weights.cc"
+         "${PROJECT_SOURCE_DIR}/signal_processing/pffft_wrapper.cc"
+-        "${THIRD_PARTY_ROOT}/pffft/pffft.c"
+-        "${THIRD_PARTY_ROOT}/pffft/fftpack.c"
++        "${THIRD_PARTY_ROOT}/pffft/pffft/pffft.c"
++        "${THIRD_PARTY_ROOT}/pffft/pffft/fftpack.c"
+     )
+ 
+     file(GLOB AGC2_CORE "${PROJECT_SOURCE_DIR}/audio_processing/automatic_gain_control2/*.cc")
+@@ -298,11 +298,11 @@ if(BUILD_AE_AGC2)
+     target_include_directories(AE_AGC2 PUBLIC
+         ${LIB_COMMON_INCLUDES}
+         "${PROJECT_SOURCE_DIR}/audio_processing/sample_rate_conversion/"
+-        "${THIRD_PARTY_ROOT}/pffft/"
++        "${THIRD_PARTY_ROOT}/pffft/pffft/"
+     )
+     target_link_libraries(AE_AGC2 PUBLIC absl::strings)
+     target_compile_definitions(AE_AGC2 PRIVATE AUDIO_ENGINE_EXPORTS)
+-    set_target_properties(AE_AGC2 PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
++    set_target_properties(AE_AGC2 PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ 
+     add_ae_test(test_ae_agc2 "test_ae_agc2.cc" AE_AGC2)
+ endif()
+@@ -335,7 +335,7 @@ if(BUILD_AE_AECM)
+     )
+     target_link_libraries(AE_AECM PUBLIC absl::strings)
+     target_compile_definitions(AE_AECM PRIVATE AUDIO_ENGINE_EXPORTS)
+-    set_target_properties(AE_AECM PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
++    set_target_properties(AE_AECM PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ 
+     add_ae_test(test_ae_aecm "test_ae_aecm.cc" AE_AECM)
+ endif()
+@@ -380,7 +380,7 @@ if(BUILD_AE_AEC)
+     )
+     target_link_libraries(AE_AEC PUBLIC absl::strings)
+     target_compile_definitions(AE_AEC PRIVATE AUDIO_ENGINE_EXPORTS)
+-    set_target_properties(AE_AEC PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
++    set_target_properties(AE_AEC PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ 
+     add_ae_test(test_ae_aec "test_ae_aec.cc" AE_AEC)
+ endif()
+@@ -429,7 +429,7 @@ if(BUILD_AE_BF)
+     )
+     target_link_libraries(AE_BF PUBLIC absl::strings)
+     target_compile_definitions(AE_BF PRIVATE AUDIO_ENGINE_EXPORTS)
+-    set_target_properties(AE_BF PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
++    set_target_properties(AE_BF PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ 
+     add_ae_test(test_ae_bf "test_ae_bf.cc" AE_BF)
+ endif()
+@@ -452,7 +452,7 @@ if(BUILD_AE_HS)
+     )
+     target_link_libraries(AE_HS PUBLIC absl::strings)
+     target_compile_definitions(AE_HS PRIVATE AUDIO_ENGINE_EXPORTS)
+-    set_target_properties(AE_HS PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
++    set_target_properties(AE_HS PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ 
+     add_ae_test(test_ae_hs "test_ae_hs.cc" AE_HS)
+ endif()
+@@ -500,7 +500,7 @@ if(BUILD_AE_IE)
+     )
+     target_link_libraries(AE_IE PUBLIC absl::strings)
+     target_compile_definitions(AE_IE PRIVATE AUDIO_ENGINE_EXPORTS)
+-    set_target_properties(AE_IE PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
++    set_target_properties(AE_IE PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ 
+     add_ae_test(test_ae_ie "test_ae_ie.cc" AE_IE)
+ endif()
+@@ -533,7 +533,7 @@ if(BUILD_AE_TS)
+     )
+     target_link_libraries(AE_TS PUBLIC absl::strings)
+     target_compile_definitions(AE_TS PRIVATE AUDIO_ENGINE_EXPORTS)
+-    set_target_properties(AE_TS PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
++    set_target_properties(AE_TS PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ 
+     add_ae_test(test_ae_ts "test_ae_ts.cc" AE_TS)
+ endif()
+@@ -575,7 +575,7 @@ if(BUILD_AE_DR)
+     )
+     target_link_libraries(AE_DR PUBLIC absl::strings)
+     target_compile_definitions(AE_DR PRIVATE AUDIO_ENGINE_EXPORTS)
+-    set_target_properties(AE_DR PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/lib")
++    set_target_properties(AE_DR PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ 
+     add_ae_test(test_ae_dr "test_ae_dr.cc" AE_DR)
+ endif()

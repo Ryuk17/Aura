@@ -1,0 +1,25 @@
+diff --git a/src/audio_engine/CMakeLists.txt b/src/audio_engine/CMakeLists.txt
+index 943c723..31c7b5c 100644
+--- a/src/audio_engine/CMakeLists.txt
++++ b/src/audio_engine/CMakeLists.txt
+@@ -310,6 +310,7 @@ if(BUILD_AE_AGC2)
+     target_include_directories(AE_AGC2 PUBLIC
+         ${LIB_COMMON_INCLUDES}
+         "${PROJECT_SOURCE_DIR}/audio_processing/sample_rate_conversion/"
++        "${THIRD_PARTY_ROOT}/pffft/"
+         "${THIRD_PARTY_ROOT}/pffft/pffft/"
+     )
+     target_link_libraries(AE_AGC2 PUBLIC absl::strings)
+diff --git a/src/audio_engine/signal_processing/pffft_wrapper.cc b/src/audio_engine/signal_processing/pffft_wrapper.cc
+index ed6caa8..c302b7f 100644
+--- a/src/audio_engine/signal_processing/pffft_wrapper.cc
++++ b/src/audio_engine/signal_processing/pffft_wrapper.cc
+@@ -15,7 +15,7 @@
+ 
+ #include "utils/array_view.h"
+ #include "utils/checks.h"
+-#include "third_party/pffft/pffft.h"
++#include "pffft/pffft.h"
+ 
+ namespace webrtc {
+ namespace {

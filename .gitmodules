@@ -1,0 +1,15 @@
+[submodule "third_party/trickroom"]
+	path = third_party/trickroom
+	url = https://github.com/Ryuk17/TrickRoom.git
+[submodule "third_party/neon-fft"]
+	path = third_party/neon-fft
+	url = https://github.com/Ryuk17/neon-fft.git
+[submodule "third_party/abseil-cpp"]
+	path = third_party/abseil-cpp
+	url = https://github.com/abseil/abseil-cpp.git
+[submodule "third_party/pffft"]
+	path = third_party/pffft
+	url = https://github.com/capocasa/pffft.git
+[submodule "third_party/eigen"]
+	path = third_party/eigen
+	url = https://gitlab.com/libeigen/eigen.git

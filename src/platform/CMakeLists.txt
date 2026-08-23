@@ -12,5 +12,7 @@ if(WIN32)
 elseif(UNIX AND NOT APPLE)
     target_sources(aura_platform PRIVATE alsa_device.cc)
     find_package(ALSA REQUIRED)
-    target_link_libraries(aura_platform PRIVATE alsa)
+    target_link_libraries(aura_platform PRIVATE ${ALSA_LIBRARIES})
+    # 环境无 pkg-config 且 ALSA 裁剪安装于 /usr/local：补充库搜索路径
+    target_link_directories(aura_platform PRIVATE /usr/local/lib)
 endif()
