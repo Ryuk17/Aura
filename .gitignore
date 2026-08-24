@@ -110,3 +110,10 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# 模型权重不入库（体积过大，GitHub LFS 免费额度 1GB 不够），
+# 仅保留下载脚本与清单，见 models/README.md
+models/*
+!models/hfd.sh
+!models/README.md
+!models/.gitkeep
