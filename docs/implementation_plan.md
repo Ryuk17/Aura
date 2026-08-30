@@ -32,8 +32,8 @@ M1 骨架 ──► M2 语音链路 ──► M3 对话链路 ──► M4 语�
 | 1.3 | `core/`：`events.h`（§4 全部事件）+ EventBus（优先级队列 + 单分发线程） | 事件总线 | 单测：优先级排序、BargeIn 抢占、背压丢弃、多生产者单消费者 |
 | 1.4 | `core/`：Orchestrator 状态机骨架（IDLE/LISTENING/PROCESSING/SPEAKING）+ 模块接口占位（IASR/ILLM/ITTS/IWakeWord 等） | 状态机可测 | 单测：全状态迁移时序、BargeIn 打断路径 |
 | 1.5 | `platform/`：HAL 接口 + WASAPI（Win）与 ALSA（Linux/aarch64）实现 | 采集/播放可用 | 开发机（linux-x86_64）采集播放回环测试（录→播）；ALSA 在 RPi 冒烟 |
-| 1.6 | **audio_engine 全量引入**（决策 D11/D12）：trickroom/neon-fft/pffft/eigen/abseil-cpp 五个 submodule + `patches/` 补丁（THIRD_PARTY_ROOT、AVX2 平台 guard）+ absl 预构建；x86_64-linux 全量编译 12 个 `libAE_*` | 算法库就绪 | 12 个 `libAE_*` 全编译 + 12 个自带 unitest 全绿（输出 wav 与参考比对脚本化）；golden wav 同步入 `resources/audio_engine/data/` |
-| 1.7 | `audio/`：重建为 **AudioChain 算法链**（配置驱动节点链）+ AECM 节点（`libAE_AECM` 统一 C API + 16kHz 封装）+ AudioFocus | 音频管线框架 | 单测：farend+近端合成信号 → 回声残余低于阈值（参照 WebRTC 测试向量思路）；链节点可配置挂载 |
+| 1.6 | **audio_engine 全量引入**（决策 D11/D12）：引入trickroom.cmake编译算法库 | 算法库就绪 | 12 个 `libAE_*` 全编译|
+| 1.7 | `audio/`：重建为 **AudioChain 算法链**（配置驱动节点链）+ AECM 节点（使用`libAE_AECM` 统一 C API + 16kHz 封装）+ AudioFocus | 音频管线框架 | 单测：farend+近端合成信号 → 回声残余低于阈值（参照 WebRTC 测试向量思路）；链节点可配置挂载 |
 | 1.8 | M1 集成 demo：采集 → 算法链 → 事件总线 → 播放回环 | demo 可跑 | 开发机上听到回声消除后的回放，日志与延迟监控输出正常 |
 
 **M1 完成标志**：无模型条件下全链路数据流（音频→事件→状态机）跑通，`git log` 有清晰的里程碑 commit。
