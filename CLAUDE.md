@@ -30,7 +30,7 @@ Aura — 板端（树莓派 / Linux SBC，远期 RTOS/MCU）全链路语音交�
 ### 分层依赖（自上而下，禁止反向依赖）
 
 ```
-apps → agent/net → kws/asr/llm/tts/voiceprint（各含 router）→ audio/dsp/inference → core/utils → platform(HAL)
+apps → agent/net → kws/asr/llm/tts/voiceprint（各含 router）→ audio/dsp/inference → core/utils → platform(HAL)/git-commit
 ```
 
 - 跨模块通信只走 core 的 pipeline 消息与 event_bus，不直接 include 别的算法模块

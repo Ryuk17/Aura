@@ -8,13 +8,15 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 ./hfd.sh taobao-mnn/sherpa-mnn-streaming-zipformer-bilingual-zh-en-2023-02-20 --local-dir sherpa-mnn-streaming-zipformer-bilingual-zh-en-2023-02-20
 
-./hfd.sh hexgrad/Kokoro-82M --local-dir tts/Kokoro-82M
-
 ./hfd.sh taobao-mnn/Qwen3.5-0.8B-MNN --local-dir llm/Qwen3.5-0.8B-MNN
 
 ./hfd.sh taobao-mnn/Qwen3-Embedding-0.6B-MNN --local-dir embedding/Qwen3-Embedding-0.6B-MNN
 
-./hfd.sh Jeryuk/smart-turn-v3.2-gpu.mnn --local-dir turn/smart-turn-v3.2-gpu.mnn
+./hfd.sh Jeryuk/kokoro-v1_0-MNN --local-dir tts/kokoro-v1_0-MNN
 
-./hfd.sh Jeryuk/silero_vad.mnn --local-dir vad/silero_vad.mnn
+./hfd.sh Jeryuk/smart-turn-v3.2-gpu-MNN --local-dir turn/smart-turn-v3.2-gpu-MNN
+
+./hfd.sh Jeryuk/silero_vad-MNN --local-dir vad/Jeryuk/silero_vad-MNN
+
+./hfd.sh Jeryuk/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common-MNN --local-dir speaker_recognition/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common-MNN
 

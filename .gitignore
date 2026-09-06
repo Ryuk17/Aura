@@ -4,6 +4,12 @@ __pycache__/
 *$py.class
 .docs/
 settings.json
+docs/
+
+
+!/models/
+/models/*
+!/models/download.sh
 
 #ide
 .idea
