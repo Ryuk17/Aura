@@ -8,10 +8,10 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 
+# 常规 Linux 交叉编译：保留完整 libc/libstdc++（MNN 与框架都需要 C++ 标准库）。
+# 注意：-nodefaultlibs/-nostdinc++ 之类的裸机选项不适用于本目标。
 set(CMAKE_C_FLAGS "-march=armv8-a")
 set(CMAKE_CXX_FLAGS "-march=armv8-a")
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -nodefaultlibs -fno-builtin -fno-stack-protector -nostdinc++ -lc")
 
 # cache flags
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}" CACHE STRING "c flags")

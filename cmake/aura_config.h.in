@@ -1,0 +1,28 @@
+/* Aura — 编译期配置（由 CMake 生成，勿手工编辑）
+ *
+ * 生成源：cmake/aura_config.h.in
+ * 用途：把 CMake 式的模块裁剪结果传给代码，使裁剪版固件可以把不需要的模块
+ * 整个编译掉（省体积与内存），而运行期配置（configs/board_xxx/）只负责调参。
+ * 二者的边界：**裁模块用编译期，调参数用运行期**。
+ */
+#ifndef AURA_GENERATED_CONFIG_H
+#define AURA_GENERATED_CONFIG_H
+
+#define AURA_VERSION_STRING "@PROJECT_VERSION@"
+#define AURA_OS_NAME        "@AURA_OS_NAME@"
+#define AURA_PLATFORM_NAME  "@CMAKE_SYSTEM_NAME@-@CMAKE_SYSTEM_PROCESSOR@"
+
+/* 模块裁剪：1 = 编译进固件，0 = 不编译 */
+#cmakedefine01 AURA_BUILD_KWS
+#cmakedefine01 AURA_BUILD_VOICEPRINT
+#cmakedefine01 AURA_BUILD_ASR
+#cmakedefine01 AURA_BUILD_LLM
+#cmakedefine01 AURA_BUILD_TTS
+#cmakedefine01 AURA_BUILD_BARGE_IN
+#cmakedefine01 AURA_BUILD_NET
+
+/* 推理后端 */
+#cmakedefine01 AURA_WITH_MNN
+#cmakedefine01 AURA_WITH_MNN_LLM
+
+#endif /* AURA_GENERATED_CONFIG_H */
