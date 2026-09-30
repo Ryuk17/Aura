@@ -4,38 +4,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概况
 
-Aura — 板端（树莓派 / Linux SBC，远期 RTOS/MCU）全链路语音交互框架：
+Aura — 板端（树莓派 / Linux SBC）全链路语音交互框架：
 `mic → AFE(3A/BSS) → VAD → KWS → 声纹 → ASR → LLM/Agent → TTS → playback`。
 端侧全离线为主路径，云端仅增强/兜底；推理统一走 MNN。项目文档用中文撰写。
 
-**⚠️ 仓库正处于重构中**：旧骨架（src/ include/ tests/ examples/ resources/ 及旧 docs）已从工作区删除，顶层 CMakeLists.txt 正在重写（当前为空）。新架构的唯一权威文档是 [docs/todo.md](docs/todo.md)（含目标目录结构、分层规则、节点契约、状态机、模型内存策略、Phase 0–5 计划、验收指标）。开工前先读它；规划中的设计文档（architecture.md / pipeline.md / model_requirement.md / memory_budget.md / barge_in.md / risk.md / porting_guide.md）按该文档落位，勿按旧结构行事。
+**状态：Phase 1（框架骨架）已完成**（2026-09-30），构建/OSAL/pipeline/事件总线/状态机/推理封装已落地并在 PC 上跑通，CTest 8/8 全绿。已实现的结构见 [docs/architecture.md](docs/architecture.md)，节点契约与状态机见 [docs/pipeline.md](docs/pipeline.md)。总计划与 Phase 2–5 待办见 [docs/todo.md](docs/todo.md)（唯一权威文档，开工前先读）。尚未落位的设计文档（model_requirement.md / memory_budget.md / barge_in.md / risk.md / porting_guide.md）按该文档落位。
+
+> ⚠️ `docs/` **不入版本库**（`.gitignore` 里有 `docs/`）—— 设计文档只在本地工作副本中存在，
+> `git ls-files docs/` 为空。引用 docs/ 下文件时注意这一点。
 
 ## 构建
 
 - 构建系统：CMake + FetchContent（第三方依赖不进 git，构建时拉取；.gitmodules 已删除）：
-  - MNN 3.3.0 — [cmake/mnn.cmake](cmake/mnn.cmake)
+  - MNN **3.6.1** — [cmake/mnn.cmake](cmake/mnn.cmake)（3.3.0 加载不了 LLM/TTS 权重；带 `If` 子图的模型必须走 `Express::Module`，见 [docs/architecture.md](docs/architecture.md) 第 4 节）
   - TrickRoom（3A 音频引擎 v0.1.0）— [cmake/trickroom.cmake](cmake/trickroom.cmake)（URL+HASH 已于 2026-09-06 修复并编译验证）
 - TrickRoom 是 CMake super-build（自带 FetchContent 拉 abseil/neon-fft/pffft/eigen），产物为 `libAE_*` 静态库目标（AE_AEC/AE_AECM/AE_NS/AE_AGC/AE_AGC2/AE_BF/AE_VAD/AE_SRC/…），直接 `target_link_libraries` 使用；无全局 include/lib 目录。
-- 工具链文件在 [toolchains/](toolchains/)：`linux-x86_64.cmake`（当前主开发平台）、`aarch64-linux-gnu.toolchain.cmake`、`arm-linux-gnueabihf.toolchain.cmake`、`windows-x86_64.cmake`
+- 工具链文件在 [toolchains/](toolchains/)：`windows-x86_64.cmake`（当前主开发平台，MinGW-w64）、`linux-x86_64.cmake`、`aarch64-linux-gnu.toolchain.cmake`、`arm-linux-gnueabihf.toolchain.cmake`
+- Windows/MinGW 工具链**静态链接 GCC 运行时**（`-static -static-libgcc -static-libstdc++`）：否则产物依赖 `libwinpthread-1.dll`，被 Git Bash 的 `/mingw64/bin` 抢先加载会报 `STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139)`。
 - 配置与编译（PC 开发）：
   ```bash
-  cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=toolchains/linux-x86_64.cmake
+  cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_TOOLCHAIN_FILE=toolchains/windows-x86_64.cmake
   cmake --build build -j
+  ctest --test-dir build --output-on-failure
   ```
 - 模型权重不入库：下载方式见 [models/download.sh](models/download.sh)（hfd.sh + `HF_ENDPOINT=https://hf-mirror.com`）。清单：ASR `sherpa-mnn-streaming-zipformer-bilingual-zh-en-2023-02-20`、TTS `Kokoro-82M`、LLM `Qwen3.5-0.8B-MNN`、Embedding `Qwen3-Embedding-0.6B-MNN`、轮次检测 `smart-turn-v3.2-gpu.mnn`、VAD `silero_vad.mnn`
-- 当前无测试代码（旧 tests/ 已删）。按计划：单测在 `tests/unit`（PC 上跑），`tests/host_sim` 是 PC 仿真（文件喂音频跑全链路）——Phase 1 出口条件即 host_sim 无硬件跑通 pipeline+event_bus+状态机。
+- 测试：`tests/unit`（零依赖 C11 测试框架，PC 上跑）+ `tests/host_sim`（PC 全链路仿真，`host_sim_in.wav` 喂音频驱动 pipeline+event_bus+状态机）。CTest 当前 8/8 通过；host_sim 另有 `--voiceprint-fail` / `--inject-error N` / `--use-silero` 三个变体。
+  ⚠️ host_sim 用的是 **mock 算法节点**（KWS 匹配 / 声纹概率 / ASR 定长延迟 / LLM 流式出 token / TTS 按 token 出块），只为验证骨架，**不是真实算法** —— 真实实现在 Phase 3/4。
 
 ## 架构要点（详见 docs/todo.md 第 3–4 节）
 
 ### 分层依赖（自上而下，禁止反向依赖）
 
 ```
-apps → agent/net → kws/asr/llm/tts/voiceprint（各含 router）→ audio/dsp/inference → core/utils → platform(HAL)/git-commit
+apps → agent/net → kws/asr/llm/tts/voiceprint（各含 router）→ audio/dsp/inference → core/utils → platform(HAL)
 ```
 
 - 跨模块通信只走 core 的 pipeline 消息与 event_bus，不直接 include 别的算法模块
 - 算法模块只依赖 inference（MNN 封装）接口，不直接碰 MNN/NPU SDK 头
-- 只有 platform/ 允许 include 板级 SDK 头；移植只改这一层
+- 只有 platform/ 允许 include 板级 SDK 头（osal 只有 POSIX 后端，**不支持 RTOS**）；移植只改这一层
 - agent 层不做信号处理、不跑推理，只消费事件/文本并下发启停指令；net 层只做传输与网络状态事件上报，端云路由切换在 asr/llm 的 router 内
 
 ### Pipeline 节点契约
@@ -54,14 +60,14 @@ barge-in 多因子裁决：AEC 近端能量 + 播放标志 + NN-VAD 概率 + KWS
 ### 模型内存策略
 
 - 常驻：KWS / VAD / 声纹；按需：ASR / TTS；LLM 视内存预算常驻，否则利用唤醒提示音播放窗口预加载，会话内 KV cache 保热
-- MNN MemoryPool 全局统一、多模型复用；只读权重走 mmap（RTOS 备选预拷贝 PSRAM）；禁止运行时 malloc/free，走 utils/mem_pool
+- MNN MemoryPool 全局统一、多模型复用；只读权重走 mmap；禁止运行时 malloc/free，走 utils/mem_pool
 
 ### 其他已定决策
 
 - 对外 API 纯 C（`include/agent_export.h`），只暴露 init/start/stop/事件回调/配置；上层不得直接操作 pipeline/node 内部
 - 声纹校验在 KWS 之后、ASR 之前；失败直接退回 Idle（省算力）；spk ID 绑 session，短期记忆按说话人隔离
 - 端侧优先：local 链路必须独立闭环可演示；router 语义 = 端侧优先，云端仅增强/兜底
-- 存储：Linux/eMMC 用 sqlite；RTOS 用自建极简 KV；所有 flash 写（长记忆/日志）走缓冲+批量落盘，禁止高频写
+- 存储：Linux/eMMC 用 sqlite；所有 flash 写（长记忆/日志）走缓冲+批量落盘，禁止高频写
 - 验收指标：唤醒→TTS 出声 < 1s（全离线）；LLM 首 token < 500ms；误唤醒 24h < 1 次；打断后 200ms 内停播；声纹拦截 ≥95% / 误拒 <5%；断网状态下全功能可用
 
 ## 开发阶段（Phase 0–5，见 docs/todo.md 第 7 节）
