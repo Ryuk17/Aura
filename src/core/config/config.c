@@ -82,6 +82,31 @@ static char *trim(char *s)
     return s;
 }
 
+/* chain_param_<algo>.<key>：收集原始文本，类型转换交给 aura_chain_from_config
+ * （只有它能查到算法的 param_specs）。键名超长在这里就拦下 —— snprintf 静默截断
+ * 会让 "ns.very_long_key" 变成别的合法键，是那种查一整天的 bug。 */
+static aura_err_t add_chain_param(aura_config_t *cfg, const char *suffix, const char *val)
+{
+    if (cfg->chain_param_count >= AURA_CONFIG_MAX_CHAIN_PARAMS) {
+        AURA_LOGE(TAG, "too many chain_param_* keys (max %d)", AURA_CONFIG_MAX_CHAIN_PARAMS);
+        return AURA_ERR_FULL;
+    }
+    if (suffix[0] == '\0' || strchr(suffix, '.') == NULL) {
+        AURA_LOGE(TAG, "chain_param key must be '<algo>.<param>', got '%s'", suffix);
+        return AURA_ERR_INVALID_ARG;
+    }
+    aura_config_kv_t *kv = &cfg->chain_params[cfg->chain_param_count];
+    if (strlen(suffix) >= sizeof(kv->key) || strlen(val) >= sizeof(kv->val)) {
+        AURA_LOGE(TAG, "chain_param '%s' too long (key<%u, val<%u)", suffix, (unsigned)sizeof(kv->key),
+                  (unsigned)sizeof(kv->val));
+        return AURA_ERR_INVALID_ARG;
+    }
+    snprintf(kv->key, sizeof(kv->key), "%s", suffix);
+    snprintf(kv->val, sizeof(kv->val), "%s", val);
+    cfg->chain_param_count++;
+    return AURA_OK;
+}
+
 static aura_err_t apply_kv(aura_config_t *cfg, const char *key, const char *val)
 {
     if (strcmp(key, "sample_rate") == 0) {
@@ -163,6 +188,17 @@ static aura_err_t apply_kv(aura_config_t *cfg, const char *key, const char *val)
     if (strcmp(key, "enable_cloud") == 0) {
         return parse_bool(val, &cfg->enable_cloud) ? AURA_OK : AURA_ERR_INVALID_ARG;
     }
+    if (strcmp(key, "chain") == 0) {
+        if (strlen(val) >= sizeof(cfg->chain)) {
+            AURA_LOGE(TAG, "chain syntax too long (max %u)", (unsigned)sizeof(cfg->chain) - 1);
+            return AURA_ERR_INVALID_ARG;
+        }
+        snprintf(cfg->chain, sizeof(cfg->chain), "%s", val);
+        return AURA_OK;
+    }
+    if (strncmp(key, "chain_param_", 12) == 0) {
+        return add_chain_param(cfg, key + 12, val);
+    }
     AURA_LOGW(TAG, "unknown config key '%s' ignored", key);
     return AURA_OK;
 }
@@ -229,4 +265,11 @@ void aura_config_dump(const aura_config_t *cfg)
               (int)cfg->enable_llm, (int)cfg->enable_tts, (int)cfg->enable_barge_in,
               (int)cfg->enable_cloud);
     AURA_LOGI(TAG, "model_dir=%s config_dir=%s", cfg->model_dir, cfg->config_dir);
+    if (cfg->chain[0] != '\0') {
+        AURA_LOGI(TAG, "chain=%s (%u param override%s)", cfg->chain, cfg->chain_param_count,
+                  (cfg->chain_param_count == 1) ? "" : "s");
+        for (uint32_t i = 0; i < cfg->chain_param_count; i++) {
+            AURA_LOGI(TAG, "  %s = %s", cfg->chain_params[i].key, cfg->chain_params[i].val);
+        }
+    }
 }

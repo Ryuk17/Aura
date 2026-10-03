@@ -35,6 +35,11 @@ aura_model_mgr_t *aura_agent_models(void);
 /* 取 agent 的状态机（只读查询；触发器经事件总线流动）。 */
 aura_sm_t *aura_agent_sm(void);
 
+/* 按装配名取由配置链建出的节点（名字即 chain 里的算法名/实例名）。
+ * 仿真与自检用：拿到句柄后读它的状态或统计（如 aura_nn_get_stats）。
+ * 找不到返回 NULL。**句柄归 agent 所有**，deinit 时随链一起释放。 */
+aura_node_t *aura_agent_chain_node(const char *name);
+
 #ifdef __cplusplus
 }
 #endif

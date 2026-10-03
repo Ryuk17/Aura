@@ -19,6 +19,16 @@
 extern "C" {
 #endif
 
+/* 链上算法的私有参数（配置里写成 `chain_param_<algo>.<key> = <value>`）。
+ * 这里只按字面收集，**不做类型判断** —— 某个键是 int 还是 float 由算法自己的
+ * param_specs 说了算（见 core/algorithm.h 的 aura_chain_from_config）。 */
+#define AURA_CONFIG_MAX_CHAIN_PARAMS 32
+
+typedef struct aura_config_kv {
+    char key[48]; /* "<algo>.<key>"，即 chain_param_ 之后的部分 */
+    char val[64];
+} aura_config_kv_t;
+
 /* 全框架运行时配置。字段按"链路 → 队列 → 状态机 → 路径"分组。 */
 typedef struct aura_config {
     /* 链路 */
@@ -46,6 +56,12 @@ typedef struct aura_config {
     char     board[32];
     char     config_dir[256];
     char     model_dir[256];
+
+    /* 算法链（Phase 2 起）：`aec3, ns, tee(silero_vad, kws)`。
+     * 空 = 不自动装配（上层自己注入节点）。语法见 core/algorithm.h。 */
+    char     chain[256];
+    aura_config_kv_t chain_params[AURA_CONFIG_MAX_CHAIN_PARAMS];
+    uint32_t         chain_param_count;
 
     /* Kconfig 式的模块裁剪开关（与编译期 AURA_BUILD_* 选项对应，
      * 运行期对未编译进来的模块给出明确错误而不是静默失效）。 */

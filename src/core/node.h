@@ -31,6 +31,10 @@
 extern "C" {
 #endif
 
+/* 一个节点最多向几个下游扇出音频（见 aura_node::next_audio）。
+ * 4 = 主线 1 + 旁路观察 3，覆盖 VAD/KWS/audio_debug 同时旁挂的极端情况。 */
+#define AURA_NODE_MAX_FANOUT 4
+
 typedef struct aura_node      aura_node_t;
 typedef struct aura_pipeline  aura_pipeline_t;
 typedef struct aura_event_bus aura_event_bus_t;
@@ -42,6 +46,14 @@ typedef struct aura_node_caps {
     bool produces_audio;  /* 会向下游产出音频帧 */
     bool produces_text;   /* 会向下游产出文本 chunk */
     bool wants_events;    /* 注册时自动订阅 event_bus（消费事件，如 barge_in/VAD） */
+    /* 消费 AEC 参考流（播放回采）：帧从 aura_pipeline_feed_ref() 进，走 in_ref 队列，
+     * 与主音频流是两个物理时钟源，**不保证帧数与 pts 与主链对齐** —— 节点自己
+     * 按 pts 对齐（AEC 适配器内做参考环缓冲），pipeline 只负责投递。 */
+    bool consumes_ref_audio;
+    /* 本节点会改变音频流形状（采样率/帧长），如 SRC 重采样。
+     * 置位后 aura_node_emit_audio **不再改写 pts**（见 struct aura_node 的 pts 契约），
+     * 由节点自算输出 pts。全链至多一个此类节点（chain 校验强制）。 */
+    bool changes_frame_rate;
 } aura_node_caps_t;
 
 /* 控制面指令：上/下游不直接调用对方函数，通过 pipeline 下发。 */
@@ -62,6 +74,10 @@ typedef struct aura_node_ops {
     aura_err_t (*stop)(aura_node_t *self);
     /* 处理一帧音频。**禁止长阻塞**。可空（不消费音频的节点）。 */
     aura_err_t (*process_audio)(aura_node_t *self, const aura_audio_frame_t *frame);
+    /* 处理一帧 AEC 参考音频（caps.consumes_ref_audio 为 true 时生效）。
+     * 与 process_audio 同线程同语义，但**不参与 pts 契约**（参考流是独立时钟源，
+     * 不设 last_in_pts）—— 节点自己按 pts 与主链对齐。可空。 */
+    aura_err_t (*process_ref_audio)(aura_node_t *self, const aura_audio_frame_t *frame);
     /* 处理一个文本 chunk。**禁止长阻塞**。可空。 */
     aura_err_t (*process_text)(aura_node_t *self, const aura_text_chunk_t *chunk);
     /* 控制面。可空。 */
@@ -99,15 +115,20 @@ struct aura_node {
     aura_node_caps_t      caps;
     const aura_node_ops_t *ops;
 
-    /* 下游连线（由 pipeline 在 link/start 时填充）。NULL = 本流终点。 */
-    aura_node_t *next_audio;
-    aura_node_t *next_text;
+    /* 下游连线（由 pipeline 在 link/start 时填充）。
+     * next_audio 是**扇出数组**：emit_audio 向每一路各拷一份帧。多数节点只有
+     * next_audio[0]（线性主线）；旁路观察者（VAD/KWS/audio_debug）挂在 1..n。
+     * 这替代了早期"单指针 + 观察者截断下游"的写法（见 pipeline.md 拓扑节）。 */
+    aura_node_t *next_audio[AURA_NODE_MAX_FANOUT];
+    uint32_t     next_audio_count;
+    aura_node_t *next_text; /* 文本仍为单下游：文本控制面没有旁路观察场景 */
 
     /* 由 pipeline 在注册时填充，节点自身只读。 */
     aura_pipeline_t  *pipeline;
     aura_event_bus_t *bus;
     aura_queue_t     *in_audio;   /* caps.consumes_audio 时有效 */
     aura_queue_t     *in_text;    /* caps.consumes_text 时有效 */
+    aura_queue_t     *in_ref;     /* caps.consumes_ref_audio 时有效（AEC 参考流） */
     int               audio_stream; /* 所属音频流 id（多路音频时区分，0 为默认流） */
 
     /* 运行期 */
@@ -116,7 +137,15 @@ struct aura_node {
     void         *priv;  /* 具体节点的私有数据 */
 
     /* pts 契约：pipeline 在处理输入帧前置为有效，处理后失效。
-     * 节点产出音频时不必自己算 pts，产出接口会以该值覆盖（todo.md 4.2）。 */
+     * 节点产出音频时不必自己算 pts，产出接口会以该值覆盖（todo.md 4.2）。
+     *
+     * 例外：caps.changes_frame_rate 的节点（SRC）产出帧的 pts 不被覆盖 ——
+     * 输入输出时基不同，覆盖就会把重采样后的时间轴压回输入时基。此类节点
+     * 自算：pts_out = 输入 pts + 已消费样本数 × 1e6 / 输入采样率，
+     * 并把输出帧头的 sample_rate 改写为输出采样率。
+     *
+     * 这两个字段只在**节点自己的 task 的 process 回调期间**有效且非线程安全：
+     * 节点的子任务/事件回调里不得调用 emit_audio（那属于 process 之外的上下文）。 */
     uint64_t last_in_pts_us;
     bool     last_in_pts_valid;
 
@@ -129,10 +158,14 @@ void aura_node_init(aura_node_t *node, const char *name, const aura_node_ops_t *
 
 /* ------- 供节点回调内部使用的产出接口（等价于"向下游推帧"） ------- */
 
-/* 产出音频帧给下游。内部会从 pipeline 帧池取缓冲并拷贝 data。
+/* 产出音频帧给下游（**扇出**：每个下游各拿一份独立的池帧拷贝）。
+ * 内部会从 pipeline 帧池取缓冲并拷贝 data。
  * 下游队列满时有界等待（10ms = 一帧时长）再放弃 —— 既不让"process 内禁止长阻塞"
  * 被破坏，也避免正常调度抖动造成丢帧；只有下游真卡死才丢，计入 dropped 统计
- * 并返回 AURA_ERR_FULL。 */
+ * 并返回 AURA_ERR_FULL。
+ *
+ * 扇出任一路失败不影响其余路：主线（next_audio[0]）丢帧才是真丢帧，旁路观察者
+ * 丢帧只降其统计。返回值为"至少一路失败"的信号，调用方通常无需特殊处理。 */
 aura_err_t aura_node_emit_audio(aura_node_t *self, const aura_audio_frame_t *frame);
 
 /* 产出文本 chunk 给下游。 */

@@ -8,7 +8,7 @@ Aura — 板端（树莓派 / Linux SBC）全链路语音交互框架：
 `mic → AFE(3A/BSS) → VAD → KWS → 声纹 → ASR → LLM/Agent → TTS → playback`。
 端侧全离线为主路径，云端仅增强/兜底；推理统一走 MNN。项目文档用中文撰写。
 
-**状态：Phase 1（框架骨架）已完成**（2026-09-30），构建/OSAL/pipeline/事件总线/状态机/推理封装已落地并在 PC 上跑通，CTest 8/8 全绿。已实现的结构见 [docs/architecture.md](docs/architecture.md)，节点契约与状态机见 [docs/pipeline.md](docs/pipeline.md)。总计划与 Phase 2–5 待办见 [docs/todo.md](docs/todo.md)（唯一权威文档，开工前先读）。尚未落位的设计文档（model_requirement.md / memory_budget.md / barge_in.md / risk.md / porting_guide.md）按该文档落位。
+**状态：Phase 1（框架骨架）已完成**（2026-09-30），构建/OSAL/pipeline/事件总线/状态机/推理封装已落地并在 PC 上跑通。**Phase 2 前置「算法统一接口」也已完成**（2026-10-02，见下文与 [docs/algorithm_unified_api.md](docs/algorithm_unified_api.md)），CTest 12/12 全绿。已实现的结构见 [docs/architecture.md](docs/architecture.md)，节点契约与状态机见 [docs/pipeline.md](docs/pipeline.md)。总计划与 Phase 2–5 待办见 [docs/todo.md](docs/todo.md)（唯一权威文档，开工前先读）。尚未落位的设计文档（barge_in.md / risk.md / porting_guide.md）按该文档落位。
 
 > ⚠️ `docs/` **不入版本库**（`.gitignore` 里有 `docs/`）—— 设计文档只在本地工作副本中存在，
 > `git ls-files docs/` 为空。引用 docs/ 下文件时注意这一点。
@@ -28,8 +28,8 @@ Aura — 板端（树莓派 / Linux SBC）全链路语音交互框架：
   ctest --test-dir build --output-on-failure
   ```
 - 模型权重不入库：下载方式见 [models/download.sh](models/download.sh)（hfd.sh + `HF_ENDPOINT=https://hf-mirror.com`）。清单：ASR `sherpa-mnn-streaming-zipformer-bilingual-zh-en-2023-02-20`、TTS `Kokoro-82M`、LLM `Qwen3.5-0.8B-MNN`、Embedding `Qwen3-Embedding-0.6B-MNN`、轮次检测 `smart-turn-v3.2-gpu.mnn`、VAD `silero_vad.mnn`
-- 测试：`tests/unit`（零依赖 C11 测试框架，PC 上跑）+ `tests/host_sim`（PC 全链路仿真，`host_sim_in.wav` 喂音频驱动 pipeline+event_bus+状态机）。CTest 当前 8/8 通过；host_sim 另有 `--voiceprint-fail` / `--inject-error N` / `--use-silero` 三个变体。
-  ⚠️ host_sim 用的是 **mock 算法节点**（KWS 匹配 / 声纹概率 / ASR 定长延迟 / LLM 流式出 token / TTS 按 token 出块），只为验证骨架，**不是真实算法** —— 真实实现在 Phase 3/4。
+- 测试：`tests/unit`（零依赖 C11 测试框架，PC 上跑）+ `tests/host_sim`（PC 全链路仿真，`host_sim_in.wav` 喂音频驱动 pipeline+event_bus+状态机）。CTest 当前 **12/12** 通过（含 `host_sim_silero`：真实 silero 模型经算法链装配跑完 7s 全链路）；host_sim 另有 `--voiceprint-fail` / `--inject-error N` / `--use-silero` / `--config <path>` 变体。
+  ⚠️ host_sim 里除 silero VAD 外都是 **mock 算法节点**（KWS 匹配 / 声纹概率 / ASR 定长延迟 / LLM 流式出 token / TTS 按 token 出块），只为验证骨架，**不是真实算法** —— 真实实现在 Phase 3/4。
 
 ## 架构要点（详见 docs/todo.md 第 3–4 节）
 
@@ -50,6 +50,19 @@ apps → agent/net → kws/asr/llm/tts/voiceprint（各含 router）→ audio/ds
 - 推模式；`process()` 内禁止长阻塞 —— ASR/LLM/TTS 大推理内部抛子 task，process 只做入队
 - 所有音频帧必须携带 `pts`（pipeline 层统一维护）：AEC 参考/多麦对齐、BSS、barge-in 裁决都依赖它
 - 错误处理：node 不得 exit；异常上抛 event_bus 错误事件 → 状态机迁入 Error，可配置自动复位回 Idle
+
+### 算法统一接口（Phase 2 前置，已落地）
+
+TrickRoom（DSP 族）与 MNN（NN 族）走**同一套接口**：算法描述表（`core/algorithm.h`，
+只回答"流形状"+"怎么造"）→ 注册表（名字→描述表）→ 链组装（`chain = aec3, ns,
+tee(silero_vad, kws), asr` + `chain_param_<算法>.<键>`）。新增算法 = 填一张描述表 + 几个回调，
+**不改 pipeline/agent，也不写配置解析代码**。拓扑 = 树形受限 DAG（线性主链 + tee 扇出旁路 +
+AEC 参考第二输入，不做通用有向图）。
+
+- DSP 族模板 [src/dsp/aura_dsp_adapter.h](src/dsp/aura_dsp_adapter.h)，真实描述表 [src/dsp/trickroom/](src/dsp/trickroom/)（AEC/NS/VAD）
+- NN 族模板 [src/algorithm/aura_nn_adapter.h](src/algorithm/aura_nn_adapter.h)（滑窗 `aura_nn_window_*`、`NN_SYNC`；`NN_ASYNC` 留接口未实现）
+- 配置三类错误（算法名未注册 / 键不在 param_specs / 值类型不符）一律**装配期报错**，不静默失效
+- 详见 [docs/algorithm_unified_api.md](docs/algorithm_unified_api.md)
 
 ### 状态机
 
@@ -72,4 +85,4 @@ barge-in 多因子裁决：AEC 近端能量 + 播放标志 + NN-VAD 概率 + KWS
 
 ## 开发阶段（Phase 0–5，见 docs/todo.md 第 7 节）
 
-Phase 0 选型 → Phase 1 框架骨架（★出口：PC host_sim 无硬件跑通）→ Phase 2 语音前端（3A/BSS/VAD；★tools/audio_debug 各节点 PCM 落盘，调参强依赖）→ Phase 3 KWS/声纹/ASR → Phase 4 对话闭环（LLM/TTS/Agent/barge-in）→ Phase 5 云端增强与优化。
+Phase 0 选型 → Phase 1 框架骨架（★出口：PC host_sim 无硬件跑通）→ **Phase 2 前置：算法统一接口 ✅** → Phase 2 语音前端（3A/BSS/VAD；★tools/audio_debug 各节点 PCM 落盘，调参强依赖；3A 接入走 DSP 描述表）→ Phase 3 KWS/声纹/ASR → Phase 4 对话闭环（LLM/TTS/Agent/barge-in）→ Phase 5 云端增强与优化。

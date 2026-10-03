@@ -35,7 +35,7 @@ aura_err_t aura_node_emit_audio(aura_node_t *self, const aura_audio_frame_t *fra
     if (p == NULL) {
         return AURA_ERR_STATE;
     }
-    if (self->next_audio == NULL) {
+    if (self->next_audio_count == 0) {
         /* 本节点是该音频流的终点：丢弃产出，不算错误。 */
         return AURA_OK;
     }
@@ -47,45 +47,58 @@ aura_err_t aura_node_emit_audio(aura_node_t *self, const aura_audio_frame_t *fra
         return AURA_ERR_INVALID_ARG;
     }
 
-    aura_audio_frame_t *copy = aura_pipeline_frame_alloc(p);
-    if (copy == NULL) {
-        self->stats.dropped++;
-        return AURA_ERR_NOMEM; /* 帧池耗尽：宁可丢帧也不阻塞音频链路 */
-    }
-
-    /* 元数据逐字段拷贝（frame->data 指向调用方缓冲，不能带过去）。 */
-    copy->sample_rate = frame->sample_rate;
-    copy->channels    = frame->channels;
-    copy->frame_count = frame->frame_count;
-    copy->fmt         = frame->fmt;
-    copy->channel_id  = frame->channel_id;
-    copy->data_bytes  = frame->data_bytes;
-
     /* pts 由 pipeline 统一维护：若本节点正在处理一帧输入，则强制沿用输入 pts，
-     * 节点自行编造的时间戳一律被纠正（todo.md 4.2）。 */
-    if (self->last_in_pts_valid) {
+     * 节点自行编造的时间戳一律被纠正（todo.md 4.2）。
+     * 例外：变帧率节点（SRC）的输入输出时基不同，覆盖会把重采样后的时间轴压回
+     * 输入时基，故对其产出不做纠正，由节点自算（见 node.h 的 pts 契约）。 */
+    uint64_t pts_out = frame->pts_us;
+    if (self->last_in_pts_valid && !self->caps.changes_frame_rate) {
         if (frame->pts_us != self->last_in_pts_us) {
             AURA_LOGD(TAG, "%s: pts corrected %llu -> %llu", self->name,
                       (unsigned long long)frame->pts_us,
                       (unsigned long long)self->last_in_pts_us);
         }
-        copy->pts_us = self->last_in_pts_us;
-    } else {
-        copy->pts_us = frame->pts_us;
+        pts_out = self->last_in_pts_us;
     }
 
-    memcpy(copy->data, frame->data, frame->data_bytes);
+    /* 扇出：每个下游各拿一份独立的池拷贝。不做引用计数 —— 一帧 ≤8KB，拷贝成本
+     * 远低于共享生命周期的复杂度（见 docs/algorithm_unified_api.md 取舍节）。
+     * 注意帧池占用随扇出宽度线性增长（见 aura_pipeline_cfg.frame_pool_blocks）。 */
+    aura_err_t last = AURA_OK;
+    for (uint32_t i = 0; i < self->next_audio_count; i++) {
+        aura_node_t *down = self->next_audio[i];
+        if (down == NULL || down->in_audio == NULL) {
+            continue;
+        }
+        aura_audio_frame_t *copy = aura_pipeline_frame_alloc(p);
+        if (copy == NULL) {
+            self->stats.dropped++;
+            last = AURA_ERR_NOMEM; /* 帧池耗尽：宁可丢帧也不阻塞音频链路 */
+            continue;
+        }
 
-    /* 有界背压：下游队列满时最多等 AURA_NODE_EMIT_WAIT_MS（10ms，一帧的时长）。
-     * 既不让"process 内禁止长阻塞"被破坏（不是无界等待），也避免正常调度抖动
-     * 造成丢帧 —— 只有下游真的卡死才会丢帧。 */
-    if (aura_osal_queue_push(self->next_audio->in_audio, copy, AURA_NODE_EMIT_WAIT_MS) !=
-        AURA_OK) {
-        aura_pipeline_frame_free(p, copy);
-        self->stats.dropped++;
-        return AURA_ERR_FULL;
+        /* 元数据逐字段拷贝（frame->data 指向调用方缓冲，不能带过去）。 */
+        copy->sample_rate = frame->sample_rate;
+        copy->channels    = frame->channels;
+        copy->frame_count = frame->frame_count;
+        copy->fmt         = frame->fmt;
+        copy->channel_id  = frame->channel_id;
+        copy->data_bytes  = frame->data_bytes;
+        copy->pts_us      = pts_out;
+        memcpy(copy->data, frame->data, frame->data_bytes);
+
+        /* 有界背压：下游队列满时最多等 AURA_NODE_EMIT_WAIT_MS（10ms，一帧的时长）。
+         * 既不让"process 内禁止长阻塞"被破坏（不是无界等待），也避免正常调度抖动
+         * 造成丢帧 —— 只有下游真的卡死才会丢帧。
+         * 旁路观察者与主线地位平等（都按背压等待），避免"观察者慢 → 主线也丢"的
+         * 级联：等待是有界的，最坏情况只损失本路。 */
+        if (aura_osal_queue_push(down->in_audio, copy, AURA_NODE_EMIT_WAIT_MS) != AURA_OK) {
+            aura_pipeline_frame_free(p, copy);
+            self->stats.dropped++;
+            last = AURA_ERR_FULL;
+        }
     }
-    return AURA_OK;
+    return last;
 }
 
 aura_err_t aura_node_emit_text(aura_node_t *self, const aura_text_chunk_t *chunk)
@@ -158,6 +171,10 @@ uint32_t aura_node_pending(const aura_node_t *self)
     }
     if (self->in_text != NULL) {
         n += aura_osal_queue_count(self->in_text);
+    }
+    if (self->in_ref != NULL) {
+        /* 参考流同样是"在途未处理的工作"，漏掉它会让 wait_drained 提前返回。 */
+        n += aura_osal_queue_count(self->in_ref);
     }
     return n;
 }

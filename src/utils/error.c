@@ -19,6 +19,7 @@ const char *aura_strerror(aura_err_t err)
     case AURA_ERR_ABORTED:     return "aborted";
     case AURA_ERR_BUSY:        return "busy";
     case AURA_ERR_EXIST:       return "already exists";
+    case AURA_ERR_DSP:         return "dsp engine error";
     default:                   return "unknown error";
     }
 }

@@ -84,6 +84,14 @@ typedef void (*aura_agent_event_cb)(const aura_agent_event_data_t *event, void *
 
 /* ------------------------------------------------------------------ 配置 */
 
+/* 链上算法的私有参数：key 形如 "<algo>.<param>"（如 "ns.level"），val 为文本。
+ * 类型转换由框架对照算法声明的 param_specs 完成 —— 对外 API 因此不需要认识
+ * 任何算法的参数表；写错键名会在 aura_agent_init 报错并指出是哪一个。 */
+typedef struct aura_agent_chain_param {
+    const char *key;
+    const char *val;
+} aura_agent_chain_param_t;
+
 typedef struct aura_agent_config {
     /* 链路参数 */
     uint32_t sample_rate;  /* 主采样率，默认 16000 */
@@ -107,6 +115,14 @@ typedef struct aura_agent_config {
     const char *board;      /* 板级标识，用于选择 configs/board_xxx/ */
     const char *config_dir; /* 配置目录 */
     const char *model_dir;  /* 模型根目录 */
+
+    /* 算法链（Phase 2 起），语法：`aec3, ns, tee(silero_vad, kws), asr`。
+     * NULL/空 = 不自动装配（由上层自行注入节点）。链上每个名字都必须已注册
+     * （见 core/algorithm.h），未注册在 init 时返回 AURA_ERR_NOT_FOUND。 */
+    const char *chain;
+    /* 链上算法的参数覆盖；count 为 0 时本字段可为 NULL。 */
+    const aura_agent_chain_param_t *chain_params;
+    uint32_t    chain_param_count;
 } aura_agent_config_t;
 
 /* 用默认值填充配置结构（调用方先 memset 再调用，或直接用本函数）。 */
@@ -157,6 +173,19 @@ typedef enum {
 aura_err_t aura_agent_feed_audio(const void *pcm, uint32_t frame_count, uint32_t channels,
                                  aura_agent_audio_fmt_t fmt, uint64_t pts_us,
                                  uint32_t timeout_ms);
+
+/* 喂入 AEC 参考信号（扬声器回采）。与 feed_audio 是**两个独立时钟源**
+ * （播放回调 vs mic 采集），帧数与时戳都不对齐，所以单独一个入口、不与主链配对：
+ * 框架不替它推进 pts，节点按 pts 自行对齐（AEC 适配器内维护参考环缓冲，
+ * 取不到对应时刻的参考就喂静音并计入 ref_missed）。
+ *   pcm         ：交错 PCM，**参考通道**（通常 1 路）
+ *   pts_us      ：按播放时间轴标注的帧首时戳，不能传 0 自动推进
+ *   timeout_ms  ：同 feed_audio；播放线程不能阻塞，传 0（不等待）。
+ * 返回 AURA_ERR_STATE = 未 start，或**链路里没有消费参考流的节点**
+ * （没配 AEC 时喂参考是有 Bug 的调用，不是正常情况）。 */
+aura_err_t aura_agent_feed_ref_audio(const void *pcm, uint32_t frame_count, uint32_t channels,
+                                     aura_agent_audio_fmt_t fmt, uint64_t pts_us,
+                                     uint32_t timeout_ms);
 
 /* 主动打断当前播报（等价于业务侧判定"有效打断"）：停播 + 中止推理 + 回 Listening。 */
 aura_err_t aura_agent_interrupt(void);

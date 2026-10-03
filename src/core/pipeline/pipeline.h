@@ -2,12 +2,23 @@
  *
  * 职责：节点注册与连线、每节点一条任务、帧池管理、pts 维护、错误上抛、统计。
  *
- * 拓扑（Phase 1）：**线性链**，一个节点最多一个下游。多路音频（多麦拆分 /
- * 参考通道）通过 `audio_stream` 字段区分，暂不做分支 —— 需要分支时扩展 link 接口。
+ * 拓扑：**树形受限 DAG** —— 一条线性主链 + 扇出旁路观察（tee）+ AEC 参考第二输入。
+ * 不是一个通用的有向图，理由见 docs/algorithm_unified_api.md：
+ *
+ *   - 控制/结果面本来就是广播（event_bus），不需要图来承载多消费者；
+ *   - 音频面唯一的多消费者场景是"旁路观察"（VAD/KWS/audio_debug 同时看同一路
+ *     PCM），用扇出即可覆盖；
+ *   - 真正的多源汇聚（两个上游的时间轴合成一路）在语音拓扑里没有对应场景，
+ *     为它引入多源 pts 仲裁与引用计数是无谓的复杂度。
+ *
+ * 三个平面：
+ *   音频面 —— `next_audio[]` 扇出（主线 + 观察者），`feed_ref` 供 AEC 参考流；
+ *   文本面 —— `next_text` 单下游（文本没有旁路观察场景）；
+ *   事件面 —— event_bus 天然广播，不受拓扑约束。
  *
  * pts 维护：`aura_pipeline_feed` 由调用方给出首帧 pts；此后 pipeline 按
- * `帧长 / 采样率` 自动推进下游 pts，保证 AEC 参考与多麦通路严格对齐（todo.md 4.2）。
- * 节点**不得**自行改写 pts —— 需要改变时间轴（如重采样）时用 audio_stream 标记。
+ * `帧长 / 采样率` 自动推进下游 pts，保证各通路严格对齐（todo.md 4.2）。
+ * 节点**不得**自行改写 pts，唯一例外是 `caps.changes_frame_rate` 的节点（SRC）。
  *
  * 帧内存：全部来自 pipeline 自有的 mem_pool，运行期无 malloc/free。
  */
@@ -36,7 +47,13 @@ typedef struct aura_pipeline_cfg {
     uint32_t channels;           /* 采集通道数（含参考通道），默认 1 */
     uint32_t audio_queue_depth;  /* 每节点音频队列深度，默认 8 */
     uint32_t text_queue_depth;   /* 每节点文本队列深度，默认 16 */
-    uint32_t frame_pool_blocks;  /* 帧池块数，默认 16（每块含 MAX_BYTES 样本区） */
+    /* AEC 参考流队列深度，默认 16（比主音频深：参考流由播放回调喂入，
+     * 突发性更强，且 AEC 缺参考只能降级处理）。 */
+    uint32_t ref_queue_depth;
+    /* 帧池块数，默认 16（每块含 MAX_BYTES 样本区）。
+     * 扇出会**成倍消耗**帧池：N 路扇出时同一帧同时在途 N 份，
+     * 按"最长路径节点数 × 最大扇出宽度"估算，默认 16 够 AEC→VAD/KWS 这类拓扑。 */
+    uint32_t frame_pool_blocks;
     uint32_t event_queue_depth;  /* 内建 event_bus 队列深度，默认 64 */
 } aura_pipeline_cfg_t;
 
@@ -48,6 +65,8 @@ typedef struct aura_pipeline_stats {
     uint64_t text_in;
     uint64_t text_out;
     uint64_t text_dropped;
+    uint64_t ref_in;      /* 外部喂入的 AEC 参考帧数 */
+    uint64_t ref_dropped; /* 参考帧丢弃数（队列满/帧池耗尽：AEC 降级，不算致命） */
     uint64_t node_errors;
 } aura_pipeline_stats_t;
 
@@ -62,15 +81,34 @@ void             aura_pipeline_destroy(aura_pipeline_t *p);
 aura_err_t aura_pipeline_attach_bus(aura_pipeline_t *p, aura_event_bus_t *bus);
 aura_event_bus_t *aura_pipeline_bus(aura_pipeline_t *p);
 
-/* 注册节点。节点结构体在 pipeline 生命周期内必须保持有效。 */
+/* 注册节点。节点结构体在 pipeline 生命周期内必须保持有效。
+ * pipeline 在注册时为其建输入队列，并在 remove/destroy 时代为销毁。 */
 aura_err_t aura_pipeline_add(aura_pipeline_t *p, aura_node_t *node);
 
+/* 摘除节点：断开所有指向它的连线、销毁其输入队列。**不释放节点结构体**
+ * （那是调用方/工厂的事）。运行中调用返回 AURA_ERR_STATE。
+ * 用途：链装配失败回滚、运行期重建链。 */
+aura_err_t aura_pipeline_remove(aura_pipeline_t *p, aura_node_t *node);
+
 /* 连线：up 的音频产出送往 down。up->caps.produces_audio 必须为 true。
+ * 可对同一 up 多次调用形成**扇出**（上限 AURA_NODE_MAX_FANOUT）：
+ * 第一次连的是主线 next_audio[0]，后续为旁路观察者。
  * 未连线时，节点的音频产出按注册顺序自动接到下一个消费音频的节点（隐式线性）。 */
 aura_err_t aura_pipeline_link(aura_pipeline_t *p, aura_node_t *up, aura_node_t *down);
 
-/* 同上，用于文本流。 */
+/* 同上，用于文本流（单下游，重复连线会覆盖）。 */
 aura_err_t aura_pipeline_link_text(aura_pipeline_t *p, aura_node_t *up, aura_node_t *down);
+
+/* 节点遍历：装配完成后可由上层取出节点句柄（chain_build / 分组控制）。
+ * idx 越界返回 NULL。顺序 = 注册顺序。 */
+uint32_t     aura_pipeline_node_count(const aura_pipeline_t *p);
+aura_node_t *aura_pipeline_node_at(const aura_pipeline_t *p, uint32_t idx);
+
+/* 取音频入口节点（未 start 时会先解析隐式连线）。无入口返回 NULL。 */
+aura_node_t *aura_pipeline_source(aura_pipeline_t *p);
+
+/* 取生效配置（链组装需要知道链路主采样率/帧长）。生命周期同 pipeline。 */
+const aura_pipeline_cfg_t *aura_pipeline_config(const aura_pipeline_t *p);
 
 /* 启动：创建各节点任务、调用 ops->init/start。 */
 aura_err_t aura_pipeline_start(aura_pipeline_t *p);
@@ -84,6 +122,17 @@ aura_err_t aura_pipeline_stop(aura_pipeline_t *p);
 aura_err_t aura_pipeline_feed(aura_pipeline_t *p, const void *pcm, uint32_t frame_count,
                               uint32_t channels, aura_sample_fmt_t fmt, uint64_t pts_us,
                               uint32_t timeout_ms);
+
+/* 喂 AEC 参考音频（播放回采），推给链上**唯一**的 caps.consumes_ref_audio 节点。
+ *
+ * 与 feed 的关键差别：参考流与主采集流是两个物理时钟源（播放回调 vs mic 采集），
+ * 帧数/时刻都不对齐，所以这里**不推进 pts、不与主链做任何配对** —— pts 由调用方
+ * 按播放时间轴标注，节点自己按 pts 对齐（AEC 适配器内维护参考环缓冲）。
+ * 缺失的参考帧不会由 pipeline 补静音：节点发现缓冲里没有对应 pts 的参考时，
+ * 自行喂静音并计入 ref_missed 统计（比 pipeline 猜要准确）。 */
+aura_err_t aura_pipeline_feed_ref(aura_pipeline_t *p, const void *pcm, uint32_t frame_count,
+                                  uint32_t channels, aura_sample_fmt_t fmt, uint64_t pts_us,
+                                  uint32_t timeout_ms);
 
 /* 向所有节点广播控制指令。 */
 aura_err_t aura_pipeline_control(aura_pipeline_t *p, aura_node_cmd_t cmd);

@@ -20,6 +20,12 @@ docs/
 # Distribution / packaging
 .Python
 build/
+# 构建 / 测试产物：build_tr 是 TrickRoom 单独验证时的构建目录，
+# Testing 是 CTest 在源码目录里跑留下的，host_sim*.wav 是仿真输入/输出
+build*/
+Testing/
+host_sim_in.wav
+host_sim_out.wav
 third_libs/
 develop-eggs/
 dist/

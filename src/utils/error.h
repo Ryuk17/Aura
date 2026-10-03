@@ -27,6 +27,7 @@ typedef enum {
     AURA_ERR_ABORTED     = -13, /* 被外部中止（barge-in / stop） */
     AURA_ERR_BUSY        = -14, /* 资源被占用 */
     AURA_ERR_EXIST       = -15, /* 对象已存在 */
+    AURA_ERR_DSP         = -16, /* DSP/音频引擎内部失败（算法未初始化、处理失败等） */
 } aura_err_t;
 
 /* 返回错误码的静态可读字符串（永不返回 NULL）。 */
