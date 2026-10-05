@@ -39,6 +39,60 @@ if(AURA_BUILD_TESTS)
 	endif()
 endif()
 
+# ------------------------------------------------- 语音前端（Phase 2，需真算法）
+# 这两条测的是**真算法链**（aec3,bf,ns,agc,src），链装配/喂帧/落盘全部来自
+# tools/audio_debug 的公共库 —— 工具里听得出的毛病，这里必须也能断言。
+# 没有 TrickRoom 就一个真算法都造不出来，故整体门控在 TR 上。
+if(AURA_WITH_TRICKROOM)
+	# out_dir 每条测试各给一个：两条测试的链同名，落盘文件名也一样，
+	# 共用目录会在并行跑时互相覆盖。
+	function(aura_add_front_test name out_dir)
+		add_executable(${name} audio_front/${name}.c)
+		target_link_libraries(${name} PRIVATE
+			aura_audio_debug_common aura_dsp_trickroom
+			aura_core aura_utils aura_platform)
+		# tests/ 在 include 路径上：框架在 tests/unit/ 下，两个测试按
+		# "unit/aura_test.h" 引它。
+		target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+		target_compile_definitions(${name} PRIVATE
+			AURA_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+			AURA_TEST_OUT_DIR="${CMAKE_CURRENT_BINARY_DIR}/${out_dir}"
+		)
+		add_test(NAME ${name} COMMAND ${name})
+		# AEC3 对 6 秒音频要跑几秒（Release）；给足余量，别让它偶发超时。
+		set_tests_properties(${name} PROPERTIES TIMEOUT 300)
+	endfunction()
+
+	aura_add_front_test(test_audio_debug audio_front)
+	# 真实阵列录音（素材未入库）：缺素材时自己打印 SKIP 并返回成功。
+	aura_add_front_test(test_audio_debug_real audio_front_real)
+
+	# 工具冒烟：造场景 → 喂回去跑真链 → --check 的形状类断言。
+	# 它验的是"人手工用工具时那条路"（命令行解析、落盘、--check），深度指标由上面
+	# 两条测试断言。
+	#
+	# 两步拆成两条测试而不是一条：add_test 只收一个 COMMAND。用 fixture 串起来，
+	# 而不是靠命名顺序 —— ctest -j 下没有 fixtures 的依赖关系不成立，跑的会是
+	# "读上一个 cwd 里恰好残留的文件"，那种绿比红更坏。
+	if(AURA_BUILD_TOOLS)
+		add_test(NAME audio_debug_gen_scene
+			COMMAND $<TARGET_FILE:audio_debug>
+				--gen-scene ${CMAKE_CURRENT_BINARY_DIR}/audio_front/synth)
+		set_tests_properties(audio_debug_gen_scene PROPERTIES
+			TIMEOUT 60 FIXTURES_SETUP aura_synth_scene)
+
+		add_test(NAME audio_debug_synth
+			COMMAND $<TARGET_FILE:audio_debug>
+				--in ${CMAKE_CURRENT_BINARY_DIR}/audio_front/synth_mic.wav
+				--ref ${CMAKE_CURRENT_BINARY_DIR}/audio_front/synth_ref.wav
+				--config ${CMAKE_CURRENT_SOURCE_DIR}/audio_front/configs/frontend_synth.conf
+				--out-dir ${CMAKE_CURRENT_BINARY_DIR}/audio_front/synth_out
+				--check)
+		set_tests_properties(audio_debug_synth PROPERTIES
+			TIMEOUT 300 FIXTURES_REQUIRED aura_synth_scene)
+	endif()
+endif()
+
 # host_sim：文件喂音频驱动全链路（Phase 1 出口验收）
 if(AURA_BUILD_HOST_SIM)
 	add_executable(host_sim
