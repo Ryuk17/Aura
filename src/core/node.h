@@ -136,6 +136,16 @@ struct aura_node {
     volatile bool running;
     void         *priv;  /* 具体节点的私有数据 */
 
+    /* 参考配对槽（仅 consumes_ref_audio 的节点）：pts 领先当前近端帧的参考帧
+     * 先存这里，等它对应的那一帧近端到来再投下去。最多一帧 —— 参考是 1:1
+     * 消费的，多出来的留在队列里轮不到，持有它只会让帧池白占一块。
+     *
+     * 存**值**不是指针：帧本来就是按值穿过队列的（见 aura_pipeline_frame_free
+     * 的注释，池块首地址从 data 反推）。由 pipeline 负责在 flush/stop 时释放，
+     * 节点自身不得触碰 —— 漏释放会让 wait_drained 永远等不到 frames_in_flight 归零。 */
+    aura_audio_frame_t pending_ref;
+    bool               has_pending_ref;
+
     /* pts 契约：pipeline 在处理输入帧前置为有效，处理后失效。
      * 节点产出音频时不必自己算 pts，产出接口会以该值覆盖（todo.md 4.2）。
      *

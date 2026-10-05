@@ -26,7 +26,10 @@ struct aura_pipeline {
     uint32_t     node_count;
     aura_node_t *source;     /* 音频入口节点 */
     aura_node_t *ref_sink;   /* 唯一的 AEC 参考流消费者（无则 NULL） */
-    uint64_t     ref_pts_us; /* feed_ref 的 pts 校验（仅统计，不做对齐） */
+    /* 参考流的自动 pts 推进（feed_ref 传 0 时用）。与近端各自独立推进：
+     * 两条流可以各按帧长走，也可以由调用方按自己的时钟标注。 */
+    uint64_t next_ref_pts_us;
+    bool     next_ref_pts_valid;
 
     aura_event_bus_t *bus;
     bool              owns_bus;
@@ -173,6 +176,9 @@ aura_err_t aura_pipeline_add(aura_pipeline_t *p, aura_node_t *node)
 
     node->pipeline = p;
     node->bus      = p->bus;
+    /* 节点结构体归调用方所有，可能没被清零过；配对槽必须先置空，
+     * 否则 stop/remove 会去释放一块从没分配过的"帧"。 */
+    node->has_pending_ref = false;
     if (node->caps.consumes_audio) {
         node->in_audio = aura_osal_queue_create(p->cfg.audio_queue_depth,
                                                 (uint32_t)sizeof(aura_audio_frame_t));
@@ -201,6 +207,12 @@ aura_err_t aura_pipeline_add(aura_pipeline_t *p, aura_node_t *node)
 /* 释放节点持有的输入队列（pipeline 代建，故由 pipeline 代销毁）。 */
 static void node_release_queues(aura_node_t *node)
 {
+    /* 配对槽里那帧也算在 frames_in_flight 里，不还回去 wait_drained 会永远
+     * 等不到归零。销毁队列之前先还，池此时还活着。 */
+    if (node->has_pending_ref && node->pipeline != NULL) {
+        aura_pipeline_frame_free(node->pipeline, &node->pending_ref);
+        node->has_pending_ref = false;
+    }
     if (node->in_audio != NULL) {
         aura_osal_queue_destroy(node->in_audio);
         node->in_audio = NULL;
@@ -448,6 +460,74 @@ static void pipeline_process_text(aura_node_t *n, const aura_text_chunk_t *chunk
     }
 }
 
+/* 参考配对：把"属于 pts = T 这一近端帧"的参考投给节点。
+ *
+ * 为什么要配对而不是按到达顺序投：早先参考只有在音频队列空的那一瞬才会被取走，
+ * 于是启动阶段前十几帧近端拿不到参考、参考又在缓冲里越积越多，两者就此错开
+ * 一个固定偏移并随调度抖动漂移。AEC 拿到的参考落在近端"未来"，回声对不上，
+ * 表现是 ERLE 只剩十几 dB 而所有统计一切正常（ref_missed 甚至可能是 0）。
+ *
+ * 规则（两条流同一时基；参考未标注 pts 时由 feed_ref 自动推进，天然与近端对齐）：
+ *   ref.pts + 帧长 <= T     → 它对应的近端帧已经过去，丢弃并计 ref_stale
+ *   ref.pts <= T < +帧长    → 就是这一帧，投下去
+ *   ref.pts >  T            → 还没轮到，留在 pending 槽等下一帧
+ *
+ * 一帧近端最多配一帧参考：AEC 是 1:1 消费的，多投只会堆在适配层 FIFO 里，
+ * 把后面的参考挤成过期 —— 那正是要消灭的东西。
+ *
+ * 配不上（槽空）时本帧不投参考，适配器按缺参考降级（静音顶替 + ref_missed）。
+ * 关键是**只降级这一帧**：下一帧按自己的 pts 照常配对，不会像顺序投那样
+ * 让偏移一直累积下去。 */
+static void pipeline_pair_ref(aura_node_t *n, uint64_t pts_us)
+{
+    if (n->in_ref == NULL) {
+        return;
+    }
+    aura_pipeline_t *p = n->pipeline;
+
+    /* 槽里那帧是最早到达的候选；槽空才再取一帧。 */
+    if (!n->has_pending_ref &&
+        aura_osal_queue_pop(n->in_ref, &n->pending_ref, AURA_NO_WAIT) == AURA_OK) {
+        n->has_pending_ref = true;
+    }
+
+    /* 丢弃已经过期的（含连锁丢弃：一次音频可能跨过好几帧参考）。 */
+    while (n->has_pending_ref) {
+        const aura_audio_frame_t *r = &n->pending_ref;
+        uint32_t rate = r->sample_rate ? r->sample_rate : p->cfg.sample_rate;
+        uint64_t dur  = (uint64_t)r->frame_count * 1000000ull / rate;
+        if (r->pts_us + dur > pts_us) {
+            break; /* 还没过期 */
+        }
+        aura_pipeline_frame_free(p, &n->pending_ref);
+        n->has_pending_ref = false;
+        aura_osal_mutex_lock(p->lock);
+        p->stats.ref_stale++;
+        aura_osal_mutex_unlock(p->lock);
+        if (aura_osal_queue_pop(n->in_ref, &n->pending_ref, AURA_NO_WAIT) != AURA_OK) {
+            break;
+        }
+        n->has_pending_ref = true;
+    }
+
+    if (!n->has_pending_ref) {
+        return; /* 缺参考：本帧降级 */
+    }
+    if (n->pending_ref.pts_us > pts_us) {
+        return; /* 领先：留在槽里等它对应的那一帧近端 */
+    }
+    pipeline_process_ref(n, &n->pending_ref); /* 内部会 frame_free */
+    n->has_pending_ref = false;
+}
+
+/* 投一帧近端：先把它该配的参考配好。参考必须先于近端进入节点，
+ * 因为适配器是"处理近端时从参考 FIFO 取头"的。 */
+static void node_handle_audio(aura_node_t *n, const aura_audio_frame_t *frame)
+{
+    pipeline_pair_ref(n, frame->pts_us);
+    pipeline_process_audio(n, frame);
+}
+
 static void node_task(void *arg)
 {
     aura_node_t *n = (aura_node_t *)arg;
@@ -461,10 +541,14 @@ static void node_task(void *arg)
          * 音频优先于参考：主链缺帧会掉帧，参考缺帧只是 AEC 降级。 */
         if (n->in_audio != NULL &&
             aura_osal_queue_pop(n->in_audio, &frame, AURA_NO_WAIT) == AURA_OK) {
-            pipeline_process_audio(n, &frame);
+            node_handle_audio(n, &frame);
             did = true;
         }
-        if (!did && n->in_ref != NULL &&
+        /* 参考独立取帧只留给**不消费音频**的纯参考节点。AEC 这类"音频+参考"
+         * 节点的参考一律由 node_handle_audio 里的 pts 配对投递，不能再走这条
+         * 路 —— 否则同一帧参考会被投两次（配一次、这里按顺序再投一次），
+         * 正是要修掉的错位来源。 */
+        if (!did && n->in_ref != NULL && n->in_audio == NULL &&
             aura_osal_queue_pop(n->in_ref, &frame, AURA_NO_WAIT) == AURA_OK) {
             pipeline_process_ref(n, &frame);
             did = true;
@@ -481,13 +565,12 @@ static void node_task(void *arg)
         /* 慢路径：在主队列上阻塞等待（超时用于周期性检查 running）。 */
         if (n->in_audio != NULL) {
             if (aura_osal_queue_pop(n->in_audio, &frame, NODE_IDLE_POLL_MS) == AURA_OK) {
-                pipeline_process_audio(n, &frame);
+                node_handle_audio(n, &frame);
                 continue;
             }
         }
-        if (n->in_ref != NULL) {
-            uint32_t timeout = (n->in_audio != NULL) ? AURA_NO_WAIT : NODE_IDLE_POLL_MS;
-            if (aura_osal_queue_pop(n->in_ref, &frame, timeout) == AURA_OK) {
+        if (n->in_ref != NULL && n->in_audio == NULL) {
+            if (aura_osal_queue_pop(n->in_ref, &frame, NODE_IDLE_POLL_MS) == AURA_OK) {
                 pipeline_process_ref(n, &frame);
                 continue;
             }
@@ -594,6 +677,11 @@ aura_err_t aura_pipeline_stop(aura_pipeline_t *p)
             aura_osal_task_destroy(n->task);
             n->task = NULL;
         }
+        /* 任务已停，槽不会再被改：在销毁队列之前把这帧还回帧池。 */
+        if (n->has_pending_ref) {
+            aura_pipeline_frame_free(p, &n->pending_ref);
+            n->has_pending_ref = false;
+        }
     }
     for (uint32_t i = p->node_count; i > 0; i--) {
         aura_node_t *n = p->nodes[i - 1];
@@ -697,11 +785,23 @@ aura_err_t aura_pipeline_feed_ref(aura_pipeline_t *p, const void *pcm, uint32_t 
     f->frame_count = (uint16_t)frame_count;
     f->fmt         = fmt;
     f->data_bytes  = bytes;
-    /* 参考流不自动推进 pts：它有自己的时钟源，由调用方按播放时间轴标注。
-     * 传 0 表示"调用方不关心"，帧就带 0 走 —— 不做任何推断，
-     * 猜错的时间轴比没有时间轴更难查。 */
-    f->pts_us     = pts_us;
-    p->ref_pts_us = pts_us;
+    /* pts 规则与 feed 一致：传 0 = 让 pipeline 按帧长自动推进（默认与近端
+     * 同节奏，两边各自从 0 起步，正好一一对应）；传非 0 = 调用方按播放时间轴
+     * 标注，用于回采时钟与采集时钟不同源时显式对齐。
+     *
+     * 参考**必须**有时间轴：pipeline 靠 pts 把它和近端帧配对（pipeline_pair_ref）。
+     * 早先这里写"传 0 就是不关心"，结果参考只能按到达顺序投，启动错位会静默
+     * 累积成固定偏移，AEC 完全不收敛而统计一切正常 —— 时间轴不是可选项。 */
+    uint64_t ref_dur = (uint64_t)frame_count * 1000000ull / p->cfg.sample_rate;
+    if (pts_us != 0) {
+        f->pts_us           = pts_us;
+        p->next_ref_pts_us  = pts_us + ref_dur;
+        p->next_ref_pts_valid = true;
+    } else {
+        f->pts_us = p->next_ref_pts_valid ? p->next_ref_pts_us : 0;
+        p->next_ref_pts_us += ref_dur;
+        p->next_ref_pts_valid = true;
+    }
 
     memcpy(f->data, pcm, bytes);
 
@@ -762,7 +862,11 @@ aura_err_t aura_pipeline_flush(aura_pipeline_t *p)
             aura_pipeline_frame_free(p, &f);
         }
         /* 参考队列同样清空：打断时在途的播放参考已经无意义，留着只会让 AEC
-         * 拿旧参考去抵消新的一段近端语音。 */
+         * 拿旧参考去抵消新的一段近端语音。配对槽里的那帧同理。 */
+        if (n->has_pending_ref) {
+            aura_pipeline_frame_free(p, &n->pending_ref);
+            n->has_pending_ref = false;
+        }
         while (n->in_ref != NULL &&
                aura_osal_queue_pop(n->in_ref, &f, AURA_NO_WAIT) == AURA_OK) {
             aura_pipeline_frame_free(p, &f);

@@ -67,6 +67,11 @@ typedef struct aura_pipeline_stats {
     uint64_t text_dropped;
     uint64_t ref_in;      /* 外部喂入的 AEC 参考帧数 */
     uint64_t ref_dropped; /* 参考帧丢弃数（队列满/帧池耗尽：AEC 降级，不算致命） */
+    /* 参考帧因"对应近端帧已经处理过去"被丢弃的帧数。参考按 pts 配对，正常
+     * 不该有；持续非 0 说明参考喂得比近端快（时间轴标错或播放回调在空转）。
+     * 早先没有 pts 配对时，这类错位会静默累积成几百毫秒的固定偏移，
+     * 表现是 AEC 完全不收敛却一切统计正常 —— 所以这个数必须看得见。 */
+    uint64_t ref_stale;
     uint64_t node_errors;
 } aura_pipeline_stats_t;
 
@@ -144,7 +149,11 @@ aura_err_t aura_pipeline_control_node(aura_pipeline_t *p, aura_node_t *node, aur
 /* 清空所有队列 + 丢弃在途帧（打断 / 复位用）。 */
 aura_err_t aura_pipeline_flush(aura_pipeline_t *p);
 
-/* 等待在途帧处理完毕（测试与优雅停止用）。 */
+/* 等待在途帧处理完毕（测试与优雅停止用）。
+ *
+ * 注意：参考帧也占帧池。喂了参考却没有喂对应的近端时，该参考会停在节点的
+ * 配对槽里等伙伴（见 feed_ref 的 pts 约定），此时本函数**不会**归零，会一直
+ * 等到超时 —— 参考不是流水线终点，测试里必须"近端/参考成对喂完再等"。 */
 aura_err_t aura_pipeline_wait_drained(aura_pipeline_t *p, uint32_t timeout_ms);
 
 void aura_pipeline_stats(const aura_pipeline_t *p, aura_pipeline_stats_t *out);
