@@ -24,6 +24,9 @@
 #if AURA_WITH_MNN
 #include "algorithm/aura_nn_adapter.h" /* 只为把 model_dir 交给 NN 节点（见 init） */
 #endif
+#if AURA_WITH_TRICKROOM
+#include "dsp/aura_dsp_adapter.h" /* 注册 TrickRoom 描述表（aec3/bf/ns/agc/src/vad） */
+#endif
 #include "core/algorithm.h"
 #include "core/config/config.h"
 #include "utils/logger/logger.h"
@@ -378,7 +381,20 @@ aura_err_t aura_agent_init(const aura_agent_config_t *cfg)
     aura_log_set_level((aura_log_level_t)g.cfg.log_level);
     aura_profiler_init();
 
-    /* 链配置先解析（不占资源）：注册表由上层在 init 前填好。 */
+#if AURA_WITH_TRICKROOM
+    /* 编译期已带 TrickRoom 时，DSP 族在这里自注册（幂等）—— 不用上层记得去注册，
+     * 否则"编进了引擎但链上写 aec3 说不认识"是最没道理的一种失败。
+     * 必须在 parse_chain_config 之前：链解析要查注册表。 */
+    {
+        aura_err_t rc = aura_dsp_trickroom_register();
+        if (rc != AURA_OK) {
+            AURA_LOGE(TAG, "trickroom algo register failed: %s", aura_strerror(rc));
+            return rc; /* 此时还没申请任何资源 */
+        }
+    }
+#endif
+
+    /* 链配置先解析（不占资源）：其余算法族（NN）由上层在 init 前注册。 */
     if (g.cfg.chain != NULL && g.cfg.chain[0] != '\0') {
         aura_err_t rc = parse_chain_config();
         if (rc != AURA_OK) {
