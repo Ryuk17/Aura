@@ -8,7 +8,7 @@ Aura — 板端（树莓派 / Linux SBC）全链路语音交互框架：
 `mic → AFE(3A/BSS) → VAD → KWS → 声纹 → ASR → LLM/Agent → TTS → playback`。
 端侧全离线为主路径，云端仅增强/兜底；推理统一走 MNN。项目文档用中文撰写。
 
-**状态：Phase 1（框架骨架）已完成**（2026-09-30），构建/OSAL/pipeline/事件总线/状态机/推理封装已落地并在 PC 上跑通。**Phase 2 前置「算法统一接口」也已完成**（2026-10-02，见下文与 [docs/algorithm_unified_api.md](docs/algorithm_unified_api.md)），CTest 12/12 全绿。已实现的结构见 [docs/architecture.md](docs/architecture.md)，节点契约与状态机见 [docs/pipeline.md](docs/pipeline.md)。总计划与 Phase 2–5 待办见 [docs/todo.md](docs/todo.md)（唯一权威文档，开工前先读）。尚未落位的设计文档（barge_in.md / risk.md / porting_guide.md）按该文档落位。
+**状态：Phase 1（框架骨架）已完成**（2026-09-30），构建/OSAL/pipeline/事件总线/状态机/推理封装已落地并在 PC 上跑通。**Phase 2 前置「算法统一接口」已完成**（2026-10-02，见下文与 [docs/algorithm_unified_api.md](docs/algorithm_unified_api.md)）；**Phase 2 语音前端主体（AEC3+BF+NS+AGC+SRC）也已打通**（2026-10-05，麦克风未接，走读文件方式验证：合成回声场景 + 真实阵列录音，CTest 22/22 全绿）。已实现的结构见 [docs/architecture.md](docs/architecture.md)，节点契约与状态机见 [docs/pipeline.md](docs/pipeline.md)。总计划与 Phase 2–5 待办见 [docs/todo.md](docs/todo.md)（唯一权威文档，开工前先读）。尚未落位的设计文档（barge_in.md / risk.md / porting_guide.md）按该文档落位。
 
 > ⚠️ `docs/` **不入版本库**（`.gitignore` 里有 `docs/`）—— 设计文档只在本地工作副本中存在，
 > `git ls-files docs/` 为空。引用 docs/ 下文件时注意这一点。
@@ -28,8 +28,17 @@ Aura — 板端（树莓派 / Linux SBC）全链路语音交互框架：
   ctest --test-dir build --output-on-failure
   ```
 - 模型权重不入库：下载方式见 [models/download.sh](models/download.sh)（hfd.sh + `HF_ENDPOINT=https://hf-mirror.com`）。清单：ASR `sherpa-mnn-streaming-zipformer-bilingual-zh-en-2023-02-20`、TTS `Kokoro-82M`、LLM `Qwen3.5-0.8B-MNN`、Embedding `Qwen3-Embedding-0.6B-MNN`、轮次检测 `smart-turn-v3.2-gpu.mnn`、VAD `silero_vad.mnn`
-- 测试：`tests/unit`（零依赖 C11 测试框架，PC 上跑）+ `tests/host_sim`（PC 全链路仿真，`host_sim_in.wav` 喂音频驱动 pipeline+event_bus+状态机）。CTest 当前 **12/12** 通过（含 `host_sim_silero`：真实 silero 模型经算法链装配跑完 7s 全链路）；host_sim 另有 `--voiceprint-fail` / `--inject-error N` / `--use-silero` / `--config <path>` 变体。
+- 语音前端验证工具（麦克风接不上时的两条路径）：
+  ```bash
+  # 合成回声场景 → 真链 aec3,bf,ns,agc,src → 每个节点 PCM 落盘（人工听评）
+  ./build/tools/audio_debug/audio_debug --gen-scene /tmp/scene
+  ./build/tools/audio_debug/audio_debug --in /tmp/scene_mic.wav --ref /tmp/scene_ref.wav \
+      --config tests/audio_front/configs/frontend_synth.conf --out-dir /tmp/out --check
+  ```
+  真实录音（`assets/audio/microphone_array` 的 CH0/CH1，**无播放回采** → AEC 走"缺参考→静音顶替"的降级路径）用 `--in` 且不带 `--ref`。`--profile` 打印帧级能量剖面（排查"哪一段被吃了"）。
+- 测试：`tests/unit`（零依赖 C11 测试框架，PC 上跑）+ `tests/host_sim`（PC 全链路仿真，`host_sim_in.wav` 喂音频驱动 pipeline+event_bus+状态机）+ `tests/audio_front`（真算法链的指标断言与听评落盘）。CTest 当前 **22/22** 通过（含 TrickRoom 自带的 6 条 `test_ae_*` 引擎回归、`host_sim_silero`：真实 silero 模型经算法链装配跑完 7s 全链路）；host_sim 另有 `--voiceprint-fail` / `--inject-error N` / `--use-silero` / `--config <path>` 变体。
   ⚠️ host_sim 里除 silero VAD 外都是 **mock 算法节点**（KWS 匹配 / 声纹概率 / ASR 定长延迟 / LLM 流式出 token / TTS 按 token 出块），只为验证骨架，**不是真实算法** —— 真实实现在 Phase 3/4。
+  ⚠️ `tests/audio_front` 的落盘 WAV 在 `build/tests/audio_front{,_real}/`；`test_audio_debug_real` 在素材缺失时 **SKIP（返回成功）**，别把它当成"真实录音验过了"。
 
 ## 架构要点（详见 docs/todo.md 第 3–4 节）
 
