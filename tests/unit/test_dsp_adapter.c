@@ -18,11 +18,16 @@ typedef struct {
     int deinit_calls;
     int reset_calls;
     int destroy_calls;
-    int last_in_samples;  /* 引擎收到的 in_samples（单通道） */
+    int last_in_samples;  /* 引擎收到的 in_samples */
+    int last_max_out;     /* 引擎收到的 max_out_samples */
     int last_ref_nonnull; /* AEC：参考指针是否非空 */
     int fail_status;      /* 非 0 = Process 返回该状态码 */
     int vad_flag;
     int gain;
+    /* 假引擎的"采样口径"：多通道用例里它得知道一帧有多少路，
+     * 才能按交错总数读写（真实引擎是在 Init 时被告知的）。 */
+    int channels;
+    int total_mode; /* 1 = 按交错总数写 out_samples（AEC 口径） */
 } fake_engine_t;
 
 /* 每个节点一个引擎实例。按创建顺序登记 —— pipeline_start 依注册顺序 init，
@@ -46,6 +51,7 @@ static void *fake_create(void)
         return NULL;
     }
     e->gain                     = 1;
+    e->channels                 = 1;
     g_engines[g_engine_count++] = e;
     return e;
 }
@@ -85,7 +91,9 @@ static int fake_reset(void *h)
     return 0;
 }
 
-/* 1→1：按 gain 缩放 */
+/* 1→1：按 gain 缩放。多通道时 in_samples 仍是**每通道**样本数（NS/AGC 口径），
+ * 交错总数 = in_samples × channels —— 这正是"口径不一致"容易踩的地方：
+ * max_out 必须容下交错总数，而写回的 out_samples 是每通道数。 */
 static int fake_1to1_process(void *h, const int16_t *in, const int16_t *ref, int in_samples,
                              int16_t *out, int max_out, int *out_samples, int *flag)
 {
@@ -94,13 +102,15 @@ static int fake_1to1_process(void *h, const int16_t *in, const int16_t *ref, int
     fake_engine_t *e = (fake_engine_t *)h;
     e->process_calls++;
     e->last_in_samples = in_samples;
+    e->last_max_out    = max_out;
     if (e->fail_status != 0) {
         return e->fail_status;
     }
-    if (out == NULL || max_out < in_samples) {
+    const int total = in_samples * e->channels;
+    if (out == NULL || max_out < total) {
         return 1; /* 引擎侧参数错误 */
     }
-    for (int i = 0; i < in_samples; i++) {
+    for (int i = 0; i < total; i++) {
         out[i] = (int16_t)(in[i] * e->gain);
     }
     *out_samples = in_samples;
@@ -137,6 +147,7 @@ static int fake_resample_process(void *h, const int16_t *in, const int16_t *ref,
     fake_engine_t *e = (fake_engine_t *)h;
     e->process_calls++;
     e->last_in_samples = in_samples;
+    e->last_max_out    = max_out;
     if (e->fail_status != 0) {
         return e->fail_status;
     }
@@ -151,7 +162,9 @@ static int fake_resample_process(void *h, const int16_t *in, const int16_t *ref,
     return 0;
 }
 
-/* AEC：记录参考是否到位，输出 = 近端（假装完美消除） */
+/* AEC：记录参考是否到位，输出 = 近端（假装完美消除）。
+ * **交错总数口径**（与真实 AudioEngine_Aec_Process 一致）：in_samples 与写回的
+ * out_samples 都是 rate/100 × 通道数，max_out 也必须 ≥ 它。 */
 static int fake_aec_process(void *h, const int16_t *in, const int16_t *ref, int in_samples,
                             int16_t *out, int max_out, int *out_samples, int *flag)
 {
@@ -159,6 +172,7 @@ static int fake_aec_process(void *h, const int16_t *in, const int16_t *ref, int 
     fake_engine_t *e = (fake_engine_t *)h;
     e->process_calls++;
     e->last_in_samples  = in_samples;
+    e->last_max_out     = max_out;
     e->last_ref_nonnull = (ref != NULL);
     if (e->fail_status != 0) {
         return e->fail_status;
@@ -191,6 +205,7 @@ typedef struct {
     uint64_t pts[TAP_MAX];
     uint32_t rate[TAP_MAX];
     uint32_t frames[TAP_MAX];
+    uint32_t channels[TAP_MAX];
     uint32_t count;
 } tap_trace_t;
 
@@ -200,10 +215,11 @@ static aura_err_t tap_process_audio(aura_node_t *self, const aura_audio_frame_t 
 {
     (void)self;
     if (g_trace.count < TAP_MAX) {
-        uint32_t i        = g_trace.count++;
-        g_trace.pts[i]    = f->pts_us;
-        g_trace.rate[i]   = f->sample_rate;
-        g_trace.frames[i] = f->frame_count;
+        uint32_t i         = g_trace.count++;
+        g_trace.pts[i]     = f->pts_us;
+        g_trace.rate[i]    = f->sample_rate;
+        g_trace.frames[i]  = f->frame_count;
+        g_trace.channels[i] = f->channels;
     }
     return AURA_OK;
 }
@@ -291,6 +307,8 @@ static aura_dsp_desc_t g_fake_descs[] = {
         .deinit        = fake_deinit,
         .reset         = fake_reset,
         .process       = fake_aec_process,
+        /* 与真实 aec3 一致：Process 用交错总数口径 */
+        .interleaved_total = true,
         .init_cfg_size = 16,
     },
 };
@@ -328,6 +346,18 @@ static void feed_pts(aura_pipeline_t *p, int count, uint64_t pts_us)
     }
     for (int k = 0; k < count; k++) {
         AURA_ASSERT_EQ(aura_pipeline_feed(p, pcm, 160, 1, AURA_SAMPLE_S16, pts_us, 200), AURA_OK);
+    }
+}
+
+/* 多通道投喂：一帧 ch 路、每路 160 样本（16k / 10ms）。 */
+static void feed_multi(aura_pipeline_t *p, int count, uint32_t ch, uint64_t pts_us)
+{
+    static int16_t pcm[160 * 2];
+    for (int i = 0; i < 160 * 2; i++) {
+        pcm[i] = (int16_t)(i + 1);
+    }
+    for (int k = 0; k < count; k++) {
+        AURA_ASSERT_EQ(aura_pipeline_feed(p, pcm, 160, ch, AURA_SAMPLE_S16, pts_us, 200), AURA_OK);
     }
 }
 
@@ -558,16 +588,19 @@ static void test_aec_ref_missing(void)
     AURA_ASSERT_EQ(s.ref_missed, 3);
     AURA_ASSERT(engine_at(0)->last_ref_nonnull);
 
-    /* 补上参考后不再缺失：3 帧参考（各 160 样本）恰被随后 3 帧近端取走 */
+    /* 补上参考后不再缺失：3 帧参考（各 160 样本）恰被随后 3 帧近端取走。
+     * 配对按 **pts**：参考的 pts 必须是"对应近端帧将要到达的时刻"。上面 3 帧近端
+     * 已占掉 [0,30ms]，故参考从 30000 起；喂成过去时刻的参考会被判过期丢弃
+     * （计入 pipeline.ref_stale），AEC 反而还是拿不到 —— 这正是 ref_stale 要暴露的事。 */
     static int16_t ref[160];
     memset(ref, 0, sizeof(ref));
     for (int k = 0; k < 3; k++) {
-        AURA_ASSERT_EQ(
-            aura_pipeline_feed_ref(p, ref, 160, 1, AURA_SAMPLE_S16, (uint64_t)k * 10000, 200),
-            AURA_OK);
+        AURA_ASSERT_EQ(aura_pipeline_feed_ref(p, ref, 160, 1, AURA_SAMPLE_S16,
+                                              (uint64_t)(30000 + k * 10000), 200),
+                       AURA_OK);
     }
-    AURA_ASSERT_EQ(aura_pipeline_wait_drained(p, 2000), AURA_OK);
-    feed_pts(p, 3, 0);
+    /* 参考不能单独等 drain：没配到近端的参考会停在节点配对槽里等伙伴。 */
+    feed_pts(p, 3, 0); /* pts 自动推进：30000 / 40000 / 50000 */
     AURA_ASSERT_EQ(aura_pipeline_wait_drained(p, 2000), AURA_OK);
 
     AURA_ASSERT_EQ(aura_dsp_get_stats(nodes[0], &s), AURA_OK);
@@ -578,6 +611,135 @@ static void test_aec_ref_missing(void)
     aura_pipeline_stats(p, &ps);
     AURA_ASSERT_EQ(ps.ref_in, 3);
     AURA_ASSERT_EQ(ps.frames_in, 6); /* 参考帧不混进主链的 frames_in */
+
+    teardown(p, nodes, n);
+}
+
+/* 多通道口径：AEC 用"交错总数"（in/max_out/out_samples 都是 rate/100×通道数），
+ * NS 那一类用"单通道数"作 in/out、用交错总数作 max_out。
+ * 单通道时两者数值相同，所以这个 bug 只在多麦场景暴露 —— 而多麦恰恰是本项目的
+ * 主场景（aec3 → bf 之前就是 2 路）。 */
+static void test_multichannel_sample_convention(void)
+{
+    setup();
+    aura_chain_t     c;
+    aura_node_t     *nodes[AURA_CHAIN_MAX_LINKS];
+    uint32_t         n = 0;
+
+    /* 链首 2 路：形状来自 chain 描述（与 .conf 的 channels 同一条路） */
+    aura_pipeline_t *p = aura_pipeline_create(NULL);
+    AURA_ASSERT(p != NULL);
+    AURA_ASSERT(aura_chain_parse("fake_aec, tap", &c) == AURA_OK);
+    c.channels = 2;
+    AURA_ASSERT_EQ(aura_chain_build(p, &c, nodes, &n), AURA_OK);
+    AURA_ASSERT_EQ(aura_pipeline_start(p), AURA_OK);
+
+    engine_at(0)->channels = 2;
+    engine_at(0)->gain     = 2;
+
+    /* 每帧 160 样本/路 → 交错 320；参考也必须是 2 路（引擎按 capture 的通道数读 far） */
+    static int16_t ref[160 * 2];
+    memset(ref, 0, sizeof(ref));
+    for (int k = 0; k < 3; k++) {
+        AURA_ASSERT_EQ(aura_pipeline_feed_ref(p, ref, 160, 2, AURA_SAMPLE_S16,
+                                              (uint64_t)k * 10000, 200),
+                       AURA_OK);
+    }
+    feed_multi(p, 3, 2, 0);
+    AURA_ASSERT_EQ(aura_pipeline_wait_drained(p, 2000), AURA_OK);
+
+    /* AEC 拿到的是交错总数（320），max_out 也得是 320 —— 传 160 会被引擎按
+     * "invalid in_samples/max_out" 每帧拒绝，而 aec3 是 drop_on_error，
+     * 表现就是"链上没声音"而不是报错。 */
+    AURA_ASSERT_EQ(engine_at(0)->last_in_samples, 320);
+    AURA_ASSERT_EQ(engine_at(0)->last_max_out, 320);
+    AURA_ASSERT(engine_at(0)->last_ref_nonnull);
+
+    aura_dsp_stats_t s;
+    AURA_ASSERT_EQ(aura_dsp_get_stats(nodes[0], &s), AURA_OK);
+    AURA_ASSERT_EQ(s.process_errors, 0);
+    AURA_ASSERT_EQ(s.ref_missed, 0); /* 2 路参考按交错总数取走后恰好一帧一帧对上 */
+    AURA_ASSERT_EQ(s.frames_out, 3);
+
+    /* 下游收到的仍是 2 路 × 160 样本（引擎写回的交错总数被换算回每通道帧数） */
+    AURA_ASSERT_EQ(g_trace.count, 3);
+    AURA_ASSERT_EQ(g_trace.frames[0], 160);
+    AURA_ASSERT_EQ(g_trace.channels[0], 2);
+    AURA_ASSERT_EQ(g_trace.rate[0], 16000);
+
+    teardown(p, nodes, n);
+}
+
+/* 多通道 NS 那一类的口径：in_samples = 每通道 160，max_out = 交错 320，
+ * 写回的 out_samples = 每通道 160。传小了引擎报参数错误（§test_multichannel 的镜像）。 */
+static void test_1to1_multichannel_maxout(void)
+{
+    setup();
+    aura_chain_t     c;
+    aura_node_t     *nodes[AURA_CHAIN_MAX_LINKS];
+    uint32_t         n = 0;
+    aura_pipeline_t *p = aura_pipeline_create(NULL);
+    AURA_ASSERT(p != NULL);
+    AURA_ASSERT(aura_chain_parse("fake_ns, tap", &c) == AURA_OK);
+    c.channels = 2;
+    AURA_ASSERT_EQ(aura_chain_build(p, &c, nodes, &n), AURA_OK);
+    AURA_ASSERT_EQ(aura_pipeline_start(p), AURA_OK);
+
+    engine_at(0)->channels = 2;
+    feed_multi(p, 2, 2, 0);
+    AURA_ASSERT_EQ(aura_pipeline_wait_drained(p, 2000), AURA_OK);
+
+    AURA_ASSERT_EQ(engine_at(0)->last_in_samples, 160); /* 每通道 */
+    AURA_ASSERT_EQ(engine_at(0)->last_max_out, 320);    /* 交错容量 */
+
+    aura_dsp_stats_t s;
+    AURA_ASSERT_EQ(aura_dsp_get_stats(nodes[0], &s), AURA_OK);
+    AURA_ASSERT_EQ(s.process_errors, 0);
+    AURA_ASSERT_EQ(s.frames_out, 2);
+    AURA_ASSERT_EQ(g_trace.count, 2);
+    AURA_ASSERT_EQ(g_trace.frames[0], 160);
+    AURA_ASSERT_EQ(g_trace.channels[0], 2);
+
+    teardown(p, nodes, n);
+}
+
+/* 参考缓冲的多通道配对：2 路参考按交错总数入队、按帧取走，不该堆积也不该误判缺失。 */
+static void test_aec_ref_2ch_pairing(void)
+{
+    setup();
+    aura_chain_t     c;
+    aura_node_t     *nodes[AURA_CHAIN_MAX_LINKS];
+    uint32_t         n = 0;
+    aura_pipeline_t *p = aura_pipeline_create(NULL);
+    AURA_ASSERT(p != NULL);
+    AURA_ASSERT(aura_chain_parse("fake_aec", &c) == AURA_OK);
+    c.channels = 2;
+    AURA_ASSERT_EQ(aura_chain_build(p, &c, nodes, &n), AURA_OK);
+    AURA_ASSERT_EQ(aura_pipeline_start(p), AURA_OK);
+    engine_at(0)->channels = 2;
+
+    static int16_t ref[160 * 2];
+    memset(ref, 0, sizeof(ref));
+    /* 先来 2 帧参考、再来 2 帧近端：每帧近端恰好取走一帧参考 */
+    for (int k = 0; k < 2; k++) {
+        AURA_ASSERT_EQ(aura_pipeline_feed_ref(p, ref, 160, 2, AURA_SAMPLE_S16,
+                                              (uint64_t)k * 10000, 200),
+                       AURA_OK);
+    }
+    feed_multi(p, 2, 2, 0);
+    AURA_ASSERT_EQ(aura_pipeline_wait_drained(p, 2000), AURA_OK);
+
+    aura_dsp_stats_t s;
+    AURA_ASSERT_EQ(aura_dsp_get_stats(nodes[0], &s), AURA_OK);
+    AURA_ASSERT_EQ(s.frames_in, 2);
+    AURA_ASSERT_EQ(s.ref_missed, 0);
+    AURA_ASSERT_EQ(s.frames_out, 2);
+
+    /* 参考帧不混进主链统计 */
+    aura_pipeline_stats_t ps;
+    aura_pipeline_stats(p, &ps);
+    AURA_ASSERT_EQ(ps.ref_in, 2);
+    AURA_ASSERT_EQ(ps.frames_in, 2);
 
     teardown(p, nodes, n);
 }
@@ -661,6 +823,9 @@ AURA_TEST(test_vad_flag_edges);
 AURA_TEST(test_resample_shape);
 AURA_TEST(test_pts_correction);
 AURA_TEST(test_aec_ref_missing);
+AURA_TEST(test_multichannel_sample_convention);
+AURA_TEST(test_1to1_multichannel_maxout);
+AURA_TEST(test_aec_ref_2ch_pairing);
 AURA_TEST(test_error_passthrough);
 AURA_TEST(test_lifecycle_and_flush);
 

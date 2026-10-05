@@ -49,10 +49,14 @@ typedef enum {
 } aura_dsp_io_kind_t;
 
 /* 统一的最宽 Process 签名：不适用的参数由 shim 忽略。
- *   in/ref  交错 int16；in_samples 为**单通道样本数**（TrickRoom 口径）
- *   out/max_out_samples 同理；out_samples 由引擎写回
+ *   in/ref  交错 int16；in_samples 为**单通道样本数**（帧长 = rate/100）
+ *   out     交错 int16；max_out_samples 为**输出缓冲的交错容量**
+ *   out_samples 由引擎写回，同样按单通道样本数
  *   flag    仅 1TO0 / NIN1_FLAG 使用（VAD 语音标志 / BF 目标存在）
- * 返回 0 成功，非 0 为引擎错误码（TrickRoom 语义）。 */
+ * 返回 0 成功，非 0 为引擎错误码（TrickRoom 语义）。
+ *
+ * 唯一的例外是 AEC/AECM：它以"交错总数"为口径（见 desc.interleaved_total），
+ * 由适配器换算 —— shim 拿不到通道数，做不了这个算术。 */
 typedef int (*aura_dsp_process_fn)(void *h, const int16_t *in, const int16_t *ref, int in_samples,
                                    int16_t *out, int max_out_samples, int *out_samples,
                                    int *flag);
@@ -82,6 +86,16 @@ typedef struct aura_dsp_desc {
     int (*reset)(void *h);
 
     aura_dsp_process_fn process; /* 必需 */
+
+    /* 引擎的 Process 样本口径：TrickRoom 各模块**并不一致**。
+     *   false（NS/AGC/SRC/VAD/BF）：in_samples / out_samples 是单通道样本数；
+     *   true （AEC/AECM）：in_samples / out_samples 是**交错总数**
+     *     （引擎内 frame_size = rate/100 × capture_channels，见 audio_engine_aec.cpp）。
+     * max_out_samples 一律按交错容量传（NS 就是这么校验的：需要 ≥ in_samples × 通道数；
+     * 其余模块只要容量够大即可）。换算在适配器里做 —— shim 拿不到通道数。
+     * 漏写这个字段的后果是"单通道能跑、多通道每帧报 INVALID_PARAM"，
+     * 属于那种只在多麦场景才暴露的问题。 */
+    bool interleaved_total;
 
     /* ---- 参数规格：声明本算法认哪些 extra 键 ----
      * finalize 会把它接到 algo.param_specs 上，于是配置里拼错键名会在装配期
@@ -124,6 +138,11 @@ aura_err_t aura_dsp_register_all(aura_dsp_desc_t *descs, uint32_t count);
  * 只在 AURA_WITH_TRICKROOM=ON 时编入。 */
 aura_dsp_desc_t *aura_dsp_trickroom_descs(uint32_t *count);
 
+/* 把 TrickRoom 全族注册进注册表（装配层在 aura_chain_from_config 之前调用）。
+ * **幂等**：已注册的名字跳过，因此 agent init/deinit/init 重复往返、或上层
+ * 先注册了同名 mock，都不会因为重名而失败。 */
+aura_err_t aura_dsp_trickroom_register(void);
+
 /* ============================== 统计 ============================== */
 
 typedef struct aura_dsp_stats {
@@ -132,6 +151,11 @@ typedef struct aura_dsp_stats {
     uint64_t samples_in;     /* 累计输入样本（单通道） */
     uint64_t process_errors; /* 引擎返回非 0 的次数 */
     uint64_t ref_missed;     /* AEC：参考流不足、以静音顶替的次数 */
+    /* AEC 参考领先量（交错样本）。取参考时缓冲里**剩下多少**说明当前这帧近端
+     * 配到的是多久以后的参考 —— 0 才是"近端配当前参考"。这个数一直不为 0
+     * 说明参考流比近端跑得快，配对在漂；漂到缓冲上限就会丢参考（ref_stale）。 */
+    uint64_t ref_lead_max;
+    uint64_t ref_stale;      /* AEC：缓冲满丢弃的最老参考样本数（配对永久错位） */
     uint64_t flag_rise;      /* 标志 0→1 次数 */
     uint64_t flag_fall;
 } aura_dsp_stats_t;

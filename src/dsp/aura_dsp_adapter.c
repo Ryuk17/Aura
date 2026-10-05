@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "utils/logger/logger.h"
+#include "utils/ringbuf/ringbuf.h"
 
 #define TAG "dsp"
 
@@ -13,8 +14,9 @@
  *
  * in_buf 要装下"上一轮攒剩的尾巴 + 一个新帧"，否则长帧输入会被拒。
  * AURA_AUDIO_FRAME_MAX_BYTES 限定单帧 ≤4096 个 int16，故 8192 样本足够。
- * ref_buf 是 AEC 参考环：8k 样本 @48k ≈ 170ms，远超 AEC3 的滤波器跨度。
- * 每节点静态占用约 40KB —— 板端 BSS 可接受（DSP 节点个位数）。
+ * ref_ring 是 AEC 参考环：8k 样本 @48k ≈ 170ms，远超 AEC3 的滤波器跨度。
+ * ref_frame 是取出的一帧参考（引擎只认连续内存，环上可能跨界）。
+ * 每节点静态占用约 64KB —— 板端 BSS 可接受（DSP 节点个位数）。
  * ------------------------------------------------------------------------ */
 #define DSP_MAX_SAMPLES 8192 /* 交错样本总数 */
 
@@ -44,9 +46,15 @@ typedef struct aura_dsp_node {
     int16_t  in_buf[DSP_MAX_SAMPLES];
     uint32_t in_fill;
 
-    /* AEC 参考环：参考流来自另一条时钟（播放回采），与近端帧数不保证对齐。 */
-    int16_t  ref_buf[DSP_MAX_SAMPLES];
-    uint32_t ref_fill;
+    /* AEC 参考环：参考流来自另一条时钟（播放回采），与近端帧数不保证对齐。
+     * 用 utils 的环形缓冲，而不是"数组 + 每帧 memmove 整个尾部"的手写 FIFO ——
+     * 后者取一帧的代价是 O(缓冲存量)（每次多搬几百毫秒的样本），环形缓冲是
+     * O(帧长) 的一次读。存储内联在节点里（aura_ringbuf_init 的静态分配路径），
+     * 全程无 malloc。**不用 TrickRoom 的 ring_buffer.c**：本文件刻意不碰任何
+     * 引擎头，AURA_WITH_TRICKROOM=OFF 时（含单测）也要能编能链。 */
+    aura_ringbuf_t ref_ring;
+    uint8_t        ref_ring_storage[DSP_MAX_SAMPLES * sizeof(int16_t)];
+    int16_t        ref_frame[DSP_MAX_SAMPLES]; /* 取参考的目标（引擎只认连续内存） */
 
     int16_t out_buf[DSP_MAX_SAMPLES];
 
@@ -201,7 +209,7 @@ static aura_err_t dsp_reset_state(aura_node_t *self)
     /* 自有缓冲一并清空：FLUSH 语义是"丢弃在途数据"，只清引擎不清适配层，
      * 下一帧就会把打断前的半帧语音接上去。 */
     n->in_fill        = 0;
-    n->ref_fill       = 0;
+    aura_ringbuf_reset(&n->ref_ring);
     n->flag_valid     = false;
     n->last_flag      = 0;
     n->base_pts_valid = false;
@@ -256,20 +264,20 @@ static void dsp_handle_flag(aura_node_t *self, int flag)
 static int dsp_run_engine(aura_dsp_node_t *n, const int16_t *in, const int16_t *ref, int16_t *out,
                           int *out_samples, int *flag)
 {
-    const aura_dsp_desc_t *d  = n->desc;
-    const int              fl = (int)n->frame_len;
+    const aura_dsp_desc_t *d         = n->desc;
+    const int              fl        = (int)n->frame_len;          /* 单通道帧长 */
+    const int              total     = (int)(n->frame_len * n->in_ch); /* 交错总数 */
+    const int              in_samples = d->interleaved_total ? total : fl;
+    /* 输出缓冲的交错容量：NS 要求 ≥ in_samples × 通道数，AEC 要求 ≥ frame_size
+     * （两者都等于 total）；其余引擎只要够大即可。 */
+    const int              max_out   = (int)n->out_frame_len * (int)n->out_ch;
 
-    switch (d->io_kind) {
-    case AURA_DSP_IO_2TO1:
-        return d->process(n->h, in, ref, fl, out, fl, out_samples, flag);
-    case AURA_DSP_IO_1TO0:
-        return d->process(n->h, in, NULL, fl, NULL, 0, out_samples, flag);
-    case AURA_DSP_IO_NIN1_FLAG:
-    case AURA_DSP_IO_1TO1:
-    case AURA_DSP_IO_RESAMPLE:
-    default:
-        return d->process(n->h, in, NULL, fl, out, (int)n->out_frame_len, out_samples, flag);
+    *out_samples = 0; /* BF/VAD 的引擎不写这个字段，先归零再交给引擎 */
+
+    if (d->io_kind == AURA_DSP_IO_1TO0) {
+        return d->process(n->h, in, NULL, in_samples, NULL, 0, out_samples, flag);
     }
+    return d->process(n->h, in, ref, in_samples, out, max_out, out_samples, flag);
 }
 
 /* 取一帧参考（AEC）：不足则用静音顶替并计数。
@@ -282,15 +290,21 @@ static const int16_t *dsp_take_ref(aura_dsp_node_t *n, uint32_t samples)
     if (n->desc->io_kind != AURA_DSP_IO_2TO1) {
         return silence;
     }
-    uint32_t need = samples * n->in_ch;
-    if (need == 0 || n->ref_fill < need) {
+    /* 一帧的交错样本数；调用方传的是单通道帧长（见 dsp_run_engine 的 in_samples 口径）。
+     * 工厂已保证 frame_len × in_ch ≤ DSP_MAX_SAMPLES，故 ref_frame 装得下。 */
+    const uint32_t need = samples * n->in_ch;
+    if (need == 0 || aura_ringbuf_avail_read(&n->ref_ring) < need * sizeof(int16_t)) {
         n->stats.ref_missed++;
         return silence;
     }
-    const int16_t *p = n->ref_buf; /* 取头部；取走后前移补齐 */
-    memmove(n->ref_buf, n->ref_buf + need, (size_t)(n->ref_fill - need) * sizeof(int16_t));
-    n->ref_fill -= need;
-    return p;
+    aura_ringbuf_read(&n->ref_ring, n->ref_frame, need * sizeof(int16_t));
+    /* 取完剩下的 = 当前近端帧配到的参考领先了多少。恒为 0 才叫"近端配当前参考"；
+     * 一直有值说明参考流跑在前面，AEC 拿到的是未来的回声，必然消不掉。 */
+    const uint32_t left = aura_ringbuf_avail_read(&n->ref_ring) / sizeof(int16_t);
+    if (left > n->stats.ref_lead_max) {
+        n->stats.ref_lead_max = left;
+    }
+    return n->ref_frame;
 }
 
 static void dsp_emit(aura_node_t *self, uint32_t samples, const int16_t *data, uint32_t rate,
@@ -359,6 +373,11 @@ static aura_err_t dsp_drain_frames(aura_dsp_node_t *n, aura_node_t *self)
                     dsp_handle_flag(self, flag);
                 }
                 uint32_t nout = (out_samples > 0) ? (uint32_t)out_samples : n->out_frame_len;
+                if (d->interleaved_total) {
+                    /* 引擎按交错总数写回（AEC 的 *out_samples = in_samples），
+                     * 而 emit 要的是每通道帧数。 */
+                    nout /= n->in_ch; /* in_ch ≥ 1，工厂已校验 */
+                }
                 if (nout > n->out_frame_len) {
                     nout = n->out_frame_len; /* 引擎给多了：截断，宁可少样本不可越界 */
                 }
@@ -441,19 +460,25 @@ static aura_err_t dsp_process_ref_audio(aura_node_t *self, const aura_audio_fram
     if (f->fmt != AURA_SAMPLE_S16 || f->channels != n->in_ch) {
         return AURA_ERR_INVALID_ARG;
     }
-    const uint32_t samples = f->frame_count * n->in_ch;
-    if (samples > DSP_MAX_SAMPLES) {
+    const uint32_t bytes = f->frame_count * n->in_ch * sizeof(int16_t);
+    if (bytes > sizeof(n->ref_ring_storage)) {
         return AURA_ERR_INVALID_ARG;
     }
-    if (n->ref_fill + samples > DSP_MAX_SAMPLES) {
-        /* 参考堆积 = 近端比远端跑得慢。丢最老的保留最新的：AEC 要的是"刚刚播放了
-         * 什么"，过期的参考比没有参考更糟（会把旧回声当作当前回声去消）。 */
-        uint32_t drop = n->ref_fill + samples - DSP_MAX_SAMPLES;
-        memmove(n->ref_buf, n->ref_buf + drop, (size_t)(n->ref_fill - drop) * sizeof(int16_t));
-        n->ref_fill -= drop;
+    /* 参考堆积 = 近端比远端跑得慢。丢最老的保留最新的：AEC 要的是"刚刚播放了
+     * 什么"，过期的参考比没有参考更糟（会把旧回声当作当前回声去消）。
+     * skip 只推读指针不搬数据；腾够空间后 write 必然全落 —— 与 aura_ringbuf_write
+     * 自身"写不下就少写（丢新）"的兜底语义不同，这里不依赖那个兜底。 */
+    const uint32_t space = aura_ringbuf_avail_write(&n->ref_ring);
+    if (bytes > space) {
+        const uint32_t drop = bytes - space;
+        aura_ringbuf_skip(&n->ref_ring, drop);
+        n->stats.ref_stale += drop / sizeof(int16_t); /* 配对从此永久前移，必须可见 */
     }
-    memcpy(n->ref_buf + n->ref_fill, f->data, (size_t)samples * sizeof(int16_t));
-    n->ref_fill += samples;
+    const uint32_t wrote = aura_ringbuf_write(&n->ref_ring, f->data, bytes);
+    if (wrote != bytes) {
+        /* 腾过空间后不该发生；真发生说明容量账算错了，宁可让统计显形。 */
+        n->stats.ref_stale += (bytes - wrote) / sizeof(int16_t);
+    }
     return AURA_OK;
 }
 
@@ -496,6 +521,10 @@ static aura_node_t *dsp_create_node(const aura_algo_params_t *params, aura_err_t
     n->desc  = d;
     n->rate  = params->sample_rate;
     n->in_ch = params->in_channels;
+
+    /* 参考环（AEC 用）：非 2TO1 形态不读不写，但存储是结构体内联的，一律初始化
+     * 成本为零。容量是编译期常量 2 的幂，init 不可能失败。 */
+    (void)aura_ringbuf_init(&n->ref_ring, n->ref_ring_storage, sizeof(n->ref_ring_storage));
 
     /* 生效形状必须有意义：采样率/通道数为 0 只可能来自装配错误。 */
     if (n->rate == 0 || n->in_ch == 0 || n->in_ch > 8) {
