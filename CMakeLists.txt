@@ -40,10 +40,11 @@ option(AURA_BUILD_NET        "编译网络传输模块"            OFF)
 
 option(AURA_WITH_MNN         "启用 MNN 推理引擎（FetchContent）" ON)
 option(AURA_WITH_MNN_LLM     "启用 MNN-LLM 管线（Phase 4，构建耗时大）" OFF)
-option(AURA_WITH_TRICKROOM   "启用 TrickRoom 3A 引擎（Phase 2，super-build）" OFF)
+option(AURA_WITH_TRICKROOM   "启用 TrickRoom 3A 引擎（Phase 2，super-build）" ON)
 
 option(AURA_BUILD_TESTS      "构建单元测试"       ON)
 option(AURA_BUILD_HOST_SIM   "构建 PC 全链路仿真" ON)
+option(AURA_BUILD_TOOLS      "构建调试工具（audio_debug）" ON)
 
 # ------------------------------------------------------------------ 平台选择
 # OSAL 只有一个后端：POSIX（Linux / Windows + MinGW-w64）。不做 RTOS 后端，
@@ -73,6 +74,11 @@ endif()
 # -------------------------------------------------------------------- 目标
 add_subdirectory(src)
 add_subdirectory(apps)
+# tools/ 里除了工具本身，还有被 tests/audio_front 复用的公共库（落盘/统计/场景），
+# 所以"不开工具但开着测试"时这一层也要进 —— 否则测试缺链接目标。
+if(AURA_BUILD_TOOLS OR (AURA_BUILD_TESTS AND AURA_WITH_TRICKROOM))
+	add_subdirectory(tools)
+endif()
 if(AURA_BUILD_TESTS)
 	enable_testing()
 	add_subdirectory(tests)

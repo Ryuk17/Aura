@@ -25,4 +25,8 @@
 #cmakedefine01 AURA_WITH_MNN
 #cmakedefine01 AURA_WITH_MNN_LLM
 
+/* 音频引擎（3A/BF/SRC）。置位后 agent 在 init 时注册 TrickRoom 算法描述表，
+ * .conf 里的 chain 才能写 aec3/bf/ns/agc/src。 */
+#cmakedefine01 AURA_WITH_TRICKROOM
+
 #endif /* AURA_GENERATED_CONFIG_H */

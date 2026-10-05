@@ -65,7 +65,8 @@ add_library(aura_dsp STATIC
 target_link_libraries(aura_dsp PUBLIC aura_core)
 
 if(AURA_WITH_TRICKROOM)
-	foreach(ae_target AE_AEC AE_NS AE_VAD)
+	# 六张描述表对应的六个引擎库：aec3 / bf / ns / agc / src（+ vad，Phase 1 已在用）
+	foreach(ae_target AE_AEC AE_BF AE_NS AE_AGC AE_SRC AE_VAD)
 		if(NOT TARGET ${ae_target})
 			message(FATAL_ERROR
 				"Aura: TrickRoom 未提供 ${ae_target} 目标（BUILD_AE_* 被关掉了？），"
@@ -85,7 +86,8 @@ if(AURA_WITH_TRICKROOM)
 		AUDIO_ENGINE_STATIC=1
 		AURA_DSP_TRICKROOM_ENABLED=1
 	)
-	target_link_libraries(aura_dsp_trickroom PUBLIC aura_dsp PRIVATE AE_AEC AE_NS AE_VAD)
+	target_link_libraries(aura_dsp_trickroom PUBLIC aura_dsp
+		PRIVATE AE_AEC AE_BF AE_NS AE_AGC AE_SRC AE_VAD)
 endif()
 
 # ---------------------------------------------------------- inference（推理）
@@ -126,4 +128,9 @@ if(AURA_WITH_MNN)
 	# aura_algorithm：配置链上的 NN 节点由它的工厂 create（chain_build 只按
 	# 描述表调函数指针），少了它链上出现 NN 算法时链接期就缺符号。
 	target_link_libraries(aura_agent PUBLIC aura_inference aura_algorithm)
+endif()
+if(AURA_WITH_TRICKROOM)
+	# aura_dsp_trickroom：同上，链上写 aec3/bf/ns/agc/src 时由它的工厂造节点。
+	# agent 是装配层，在这一层链住 DSP 族不违反分层（core 仍然不认识 TrickRoom）。
+	target_link_libraries(aura_agent PUBLIC aura_dsp_trickroom)
 endif()
