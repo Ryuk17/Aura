@@ -8,3 +8,5 @@
 # tests/ 依赖 tools/ 的方向比反过来自然。
 
 add_subdirectory(audio_debug)
+add_subdirectory(model_probe)
+add_subdirectory(voiceprint_enroll)

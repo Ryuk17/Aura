@@ -9,11 +9,14 @@
 #ifndef AURA_INFERENCE_ENGINE_MNN_ENGINE_MNN_H
 #define AURA_INFERENCE_ENGINE_MNN_ENGINE_MNN_H
 
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
 #include <MNN/Interpreter.hpp>
+#include <MNN/expr/Executor.hpp>
 #include <MNN/expr/Expr.hpp>
 #include <MNN/expr/Module.hpp>
 
@@ -23,12 +26,32 @@
 extern "C" {
 #endif
 
+/* 推理组（见 inference.h 的说明）：一个运行时 + 一个前向锁。
+ * 默认组（is_default）沿用引擎全局配置，其余是自建 Runtime/RuntimeManager。 */
+struct aura_infer_group {
+    MNN::BackendConfig  bc;
+    MNN::ScheduleConfig sched;
+
+    MNN::RuntimeInfo runtime; /* SESSION 路径 */
+    std::shared_ptr<MNN::Express::Executor::RuntimeManager> rtmgr; /* MODULE 路径 */
+
+    /* 同组前向串行。锁的存在不是为了"多线程同时用"——MNN 明确不支持那样用，
+     * 而是为了让**用错的代价从内存踩踏变成等待**（见 aura_model_run）。 */
+    std::mutex run_lock;
+
+    bool     is_default;
+    uint32_t module_count; /* 统计用：有 Module 才把 rtmgr 的内存算进账 */
+    uint32_t group_id;
+};
+
 /* 引擎侧对模型的封装：SESSION 形态持有 Interpreter+Session，
  * MODULE 形态持有 Express::Module；LLM 形态在 Phase 4 接入。 */
 struct aura_infer_model {
     char              path[256];
     aura_infer_form_t form;
     aura_model_info_t info;
+
+    aura_infer_group_t *group; /* 所属推理组（加载时定，不随模型改） */
 
     /* SESSION 形态 */
     std::shared_ptr<MNN::Interpreter> net;

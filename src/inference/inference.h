@@ -55,6 +55,34 @@ const char *aura_infer_version(void);
 /* 全局内存统计：MNN MemoryPool 的当前/峰值占用（字节）。引擎不支持时返回 0。 */
 aura_err_t aura_infer_memory_stats(uint64_t *current_bytes, uint64_t *peak_bytes);
 
+/* -------------------------------------------------------------- 推理组
+ *
+ * 为什么需要"组"：MNN 的 RuntimeManager / 全局 Executor **不可跨线程使用**
+ * （官方文档 docs/pymnn/RuntimeManager.md、docs/inference/module.md：Module 的运行
+ * 依赖绑定的 Executor，多线程并发需上锁或绑定不同的 Executor）。而 MNN 的
+ * Backend::onAcquireBuffer 内部无锁 —— 共享一个 RuntimeManager 的两个线程同时
+ * onForward，踩的是同一块内存池。
+ *
+ * 于是：**并发执行的模型必须分属不同的组**，同组内的前向有锁串行（见 aura_model_run）。
+ *
+ *   - 默认组：aura_infer_load 的落点，全局一份，所有 SYNC 节点共用（前向短，
+ *     串行开销可忽略）；
+ *   - 私有组：aura_infer_group_create 建的，供子任务线程独占（ASR/声纹），
+ *     组锁零竞争，且与 VAD/KWS 的内存池物理隔离。
+ *
+ * 组是不透明句柄：MNN 对象仍在 engine_mnn 内部，算法层只看见一个指针。 */
+typedef struct aura_infer_group aura_infer_group_t;
+
+/* 建私有组。cfg 为 NULL 时沿用引擎全局配置（aura_infer_init 的那份）。
+ * 需要引擎已初始化，否则返回 NULL。 */
+aura_infer_group_t *aura_infer_group_create(const aura_infer_cfg_t *cfg);
+
+/* 销毁组。**组内所有模型必须已卸载**（组不代管模型生命周期）。 */
+aura_err_t aura_infer_group_destroy(aura_infer_group_t *group);
+
+/* 默认组（aura_infer_load 用的那个）。销毁引擎前可用来把模型归到默认组。 */
+aura_infer_group_t *aura_infer_default_group(void);
+
 /* ------------------------------------------------------------------ 模型 */
 
 typedef enum {
@@ -100,12 +128,46 @@ typedef struct aura_model_info {
     uint64_t load_us;       /* 加载耗时（首响延迟的重要组成） */
 } aura_model_info_t;
 
-/* 加载模型。form 决定用哪种运行形态；路径不存在返回 AURA_ERR_IO，
+/* 加载模型（落在默认组）。form 决定用哪种运行形态；路径不存在返回 AURA_ERR_IO，
  * 形态不支持（如未编译 MNN-LLM）返回 AURA_ERR_UNSUPPORTED。 */
 aura_infer_model_t *aura_infer_load(const char *path, aura_infer_form_t form);
+
+/* 加载到指定组（group 为 NULL = 默认组，等价于 aura_infer_load）。 */
+aura_infer_model_t *aura_infer_load_in_group(aura_infer_group_t *group, const char *path,
+                                             aura_infer_form_t form);
 aura_err_t          aura_infer_unload(aura_infer_model_t *model);
 
 aura_err_t aura_model_get_info(const aura_infer_model_t *model, aura_model_info_t *out);
+
+/* -------------------------------------------------------------- 模型元数据
+ *
+ * 流式 zipformer 一族（KWS/ASR）的**超参全部来自模型文件自带的 metadata**
+ * （encoder_dims / T / decode_chunk_len / left_context_len / vocab_size ...），
+ * 硬编码进算法会在换模型时静默错位 —— 所以必须能读。
+ *
+ * 形态差异：metadata 挂在 Express::Module 上，**只有 MODULE 形态读得到**；
+ * SESSION 形态的 Interpreter 不暴露它（只有 getModelVersion），返回
+ * AURA_ERR_UNSUPPORTED。需要 metadata 的算法因此必须声明 form=MODULE。 */
+
+/* 取一个键的字符串值。键不存在返回 AURA_ERR_NOT_FOUND；形态不支持返回
+ * AURA_ERR_UNSUPPORTED；out 容量不足返回 AURA_ERR_INVALID_ARG（不截断写入）。 */
+aura_err_t aura_model_meta(const aura_infer_model_t *model, const char *key, char *out,
+                           uint32_t cap);
+
+/* 枚举全部 metadata 键值对（探针/诊断用，算法不依赖它）。
+ * count 不支持或键不存在时返回 0；at 越界返回 AURA_ERR_NOT_FOUND。
+ * 按 key 有序 —— 输出稳定，适合做"模型指纹"打印。 */
+int32_t    aura_model_meta_count(const aura_infer_model_t *model);
+aura_err_t aura_model_meta_at(const aura_infer_model_t *model, int32_t idx, char *key,
+                              uint32_t key_cap, char *val, uint32_t val_cap);
+
+/* 取一个整数键。键不存在或解析失败都返回 def（调用方据此做回退）。 */
+int32_t aura_model_meta_i32(const aura_infer_model_t *model, const char *key, int32_t def);
+
+/* 取一个整数向量键（sherpa 的 encoder_dims 等是逗号分隔，兼容空格）。
+ * 返回写入 out 的元素个数（0 = 键不存在/解析失败）。max 个封顶。 */
+int32_t aura_model_meta_i32vec(const aura_infer_model_t *model, const char *key, int32_t *out,
+                               int32_t max);
 
 int32_t    aura_model_input_count(const aura_infer_model_t *model);
 int32_t    aura_model_output_count(const aura_infer_model_t *model);

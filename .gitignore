@@ -123,3 +123,5 @@ venv.bak/
 # mypy
 .mypy_cache/
 
+# 测试运行时产物（库文件/临时输出）
+/*.bin

@@ -34,6 +34,7 @@
 #include <MNN/HalideRuntime.h>
 #include <MNN/MNNForwardType.h>
 #include <MNN/expr/Executor.hpp>
+#include <MNN/expr/ExecutorScope.hpp>
 #include <MNN/expr/ExprCreator.hpp>
 #include <MNN/expr/NeuralNetWorkOp.hpp>
 
@@ -51,11 +52,7 @@ namespace {
 struct EngineState {
     bool             inited = false;
     aura_infer_cfg_t cfg;
-    ScheduleConfig   sched;
-    RuntimeInfo      runtime; /* SESSION 全局共享：MemoryPool 复用 */
-    /* MODULE 全局共享：Express 走 RuntimeManager，所有 Module 挂同一份，
-     * 中间张量内存在 RuntimeManager 内复用（todo.md 4.4）。 */
-    std::shared_ptr<Express::Executor::RuntimeManager> rtmgr;
+    uint32_t         group_seq = 0; /* 私有组编号（日志/诊断用） */
 };
 
 EngineState g_state;
@@ -67,9 +64,25 @@ std::vector<aura_infer_model_t *> &engine_models()
     return models;
 }
 
-ScheduleConfig make_sched(const aura_infer_cfg_t *cfg)
+/* 默认组（aura_infer_init 建，aura_infer_load 的落点）。 */
+aura_infer_group_t *g_default_group = nullptr;
+
+/* 所有组，含默认组（顺序 = 创建顺序）。内存统计与 deinit 用它。 */
+std::vector<aura_infer_group_t *> &engine_groups()
 {
-    static BackendConfig bc; /* 生命周期必须覆盖所有 session：静态持有 */
+    static std::vector<aura_infer_group_t *> groups;
+    return groups;
+}
+
+/* 按 cfg 填好 group->bc / group->sched（sched.backendConfig 指向组内的 bc，
+ * 所以组结构体**不能**在创建后再搬家）。 */
+void fill_group_sched(aura_infer_group_t *g, const aura_infer_cfg_t *cfg)
+{
+    g->bc.power     = BackendConfig::Power_Normal;
+    g->bc.memory    = cfg->memory_low ? BackendConfig::Memory_Low : BackendConfig::Memory_Normal;
+    g->bc.precision = cfg->precision_low ? BackendConfig::Precision_Low
+                                         : BackendConfig::Precision_Normal;
+
     ScheduleConfig sc;
     switch (cfg->backend) {
     case AURA_INFER_BACKEND_CPU:    sc.type = MNN_FORWARD_CPU; break;
@@ -77,13 +90,9 @@ ScheduleConfig make_sched(const aura_infer_cfg_t *cfg)
     case AURA_INFER_BACKEND_VULKAN: sc.type = MNN_FORWARD_VULKAN; break;
     default:                        sc.type = MNN_FORWARD_AUTO; break;
     }
-    sc.numThread = (cfg->threads > 0) ? cfg->threads : 2;
-    bc.power     = BackendConfig::Power_Normal;
-    bc.memory    = cfg->memory_low ? BackendConfig::Memory_Low : BackendConfig::Memory_Normal;
-    bc.precision = cfg->precision_low ? BackendConfig::Precision_Low
-                                      : BackendConfig::Precision_Normal;
-    sc.backendConfig = &bc;
-    return sc;
+    sc.numThread          = (cfg->threads > 0) ? cfg->threads : 2;
+    sc.backendConfig      = &g->bc;
+    g->sched              = sc;
 }
 
 /* halide_type_t → aura dtype。 */
@@ -150,6 +159,10 @@ Express::VARP make_input_var(const int32_t *dims, int32_t dim_count, aura_dtype_
     return Express::_Input(shape, Express::NCHW, to_halide(dtype));
 }
 
+/* MNN Express 的全局状态（_Input 分配 / compute 缓存 / Module 装卸）不是
+ * 线程安全的 —— 官方多线程契约的全局锁方案（见 aura_model_run 的注释）。 */
+static std::mutex g_express_lock;
+
 /* MODULE 形态下张量的权威形状在 VARP 上（resize / onForward 之后会变），
  * 回填缓存供 aura_tensor_bytes / aura_tensor_get_info 使用。 */
 void refresh_info_from_var(aura_tensor_t *t)
@@ -210,35 +223,91 @@ aura_err_t aura_infer_init(const aura_infer_cfg_t *cfg)
     if (g_state.inited) {
         return AURA_ERR_EXIST;
     }
-    g_state.cfg   = *cfg;
-    g_state.sched = make_sched(cfg);
+    g_state.cfg = *cfg;
 
-    /* SESSION 路径的全局共享 Runtime：所有 session 的内存都在这一个池里调度。 */
-    g_state.runtime = Interpreter::createRuntime({g_state.sched});
-    if (g_state.runtime.first.empty() && g_state.runtime.second == nullptr) {
-        AURA_LOGE(TAG, "createRuntime failed");
+    g_default_group = aura_infer_group_create(cfg);
+    if (g_default_group == nullptr) {
         return AURA_ERR_FAIL;
     }
-    /* MODULE 路径的全局共享 RuntimeManager，配置同上（同一个 sched）。 */
-    g_state.rtmgr.reset(
-        Express::Executor::RuntimeManager::createRuntimeManager(g_state.sched));
-    if (g_state.rtmgr == nullptr) {
-        AURA_LOGE(TAG, "createRuntimeManager failed");
-        return AURA_ERR_FAIL;
-    }
+    g_default_group->is_default = true;
+
     g_state.inited = true;
     AURA_LOGI(TAG, "MNN %s ready (threads=%d, precision=%s, memory=%s)", MNN::getVersion(),
-              g_state.sched.numThread, cfg->precision_low ? "low" : "normal",
+              g_default_group->sched.numThread, cfg->precision_low ? "low" : "normal",
               cfg->memory_low ? "low" : "normal");
     return AURA_OK;
 }
 
 void aura_infer_deinit(void)
 {
-    g_state.runtime.first.clear();
-    g_state.runtime.second.reset();
-    g_state.rtmgr.reset();
+    /* 模型必须先卸干净：组销毁后组内的 Runtime 就没了，模型会悬空。
+     * 这里不代卸（那是调用方的事），但要说清楚，别让悬挂以段错误的形式出现。 */
+    if (!engine_models().empty()) {
+        AURA_LOGW(TAG, "deinit with %d model(s) still loaded", (int)engine_models().size());
+    }
+    for (aura_infer_group_t *g : engine_groups()) {
+        if (!g->is_default) {
+            AURA_LOGW(TAG, "group %u still alive at deinit (leaked)", g->group_id);
+            continue; /* 默认组由下面统一释放；私有组泄漏则不能碰，留给调用方 */
+        }
+    }
+    engine_groups().clear();
+    if (g_default_group != nullptr) {
+        delete g_default_group;
+        g_default_group = nullptr;
+    }
     g_state.inited = false;
+}
+
+aura_err_t aura_infer_group_destroy(aura_infer_group_t *group)
+{
+    if (group == NULL) {
+        return AURA_ERR_INVALID_ARG;
+    }
+    if (group->is_default) {
+        return AURA_ERR_INVALID_ARG; /* 默认组随引擎生命周期，单独销毁会让已加载模型悬空 */
+    }
+    auto &groups = engine_groups();
+    groups.erase(std::remove(groups.begin(), groups.end(), group), groups.end());
+    delete group;
+    return AURA_OK;
+}
+
+/* 建组。is_default 由调用方在返回后标（aura_infer_init 用）。 */
+aura_infer_group_t *aura_infer_group_create(const aura_infer_cfg_t *cfg)
+{
+    if (!g_state.inited && cfg == NULL) {
+        return NULL; /* 建私有组必须先有引擎（要沿用/参考全局配置时序） */
+    }
+    aura_infer_cfg_t use = (cfg != NULL) ? *cfg : g_state.cfg;
+
+    std::unique_ptr<aura_infer_group_t> g(new aura_infer_group_t());
+    g->is_default     = false;
+    g->module_count   = 0;
+    g->group_id       = g_state.group_seq++;
+    fill_group_sched(g.get(), &use);
+
+    /* SESSION 路径的 Runtime：组内 session 的内存都在这一个池里调度。 */
+    g->runtime = Interpreter::createRuntime({g->sched});
+    if (g->runtime.first.empty() && g->runtime.second == nullptr) {
+        AURA_LOGE(TAG, "createRuntime failed");
+        return NULL;
+    }
+    /* MODULE 路径的 RuntimeManager，配置同上（同一个 sched）。
+     * 每个组一份：MNN 的 RuntimeManager 不可跨线程共享（见 inference.h）。 */
+    g->rtmgr.reset(Express::Executor::RuntimeManager::createRuntimeManager(g->sched));
+    if (g->rtmgr == nullptr) {
+        AURA_LOGE(TAG, "createRuntimeManager failed");
+        return NULL;
+    }
+
+    engine_groups().push_back(g.get());
+    return g.release();
+}
+
+aura_infer_group_t *aura_infer_default_group(void)
+{
+    return g_default_group;
 }
 
 bool aura_infer_ready(void)
@@ -286,7 +355,7 @@ static bool load_session(aura_infer_model_t *m, const char *path)
         AURA_LOGE(TAG, "createFromFile failed: %s", path);
         return false;
     }
-    m->session = m->net->createSession(g_state.sched, g_state.runtime);
+    m->session = m->net->createSession(m->group->sched, m->group->runtime);
     if (m->session == NULL) {
         AURA_LOGE(TAG, "createSession failed: %s", path);
         return false;
@@ -330,7 +399,11 @@ static bool load_module(aura_infer_model_t *m, const char *path)
     Express::Module::Config cfg;
     cfg.rearrange = true; /* 与 sherpa-mnn GetSessionOptionsImpl 一致 */
 
-    m->module.reset(Express::Module::load({}, {}, path, g_state.rtmgr, &cfg));
+    /* Module 创建与输入 VARP 的建立走 Express 全局状态，上全局锁
+     * （见 aura_model_run 里 g_express_lock 的注释）。 */
+    std::lock_guard<std::mutex> express_guard(g_express_lock);
+
+    m->module.reset(Express::Module::load({}, {}, path, m->group->rtmgr, &cfg));
     if (m->module == nullptr) {
         AURA_LOGE(TAG, "Module::load failed: %s", path);
         return false;
@@ -384,7 +457,8 @@ static bool load_module(aura_infer_model_t *m, const char *path)
     return true;
 }
 
-aura_infer_model_t *aura_infer_load(const char *path, aura_infer_form_t form)
+aura_infer_model_t *aura_infer_load_in_group(aura_infer_group_t *group, const char *path,
+                                             aura_infer_form_t form)
 {
     if (path == NULL || path[0] == '\0') {
         return NULL;
@@ -398,6 +472,9 @@ aura_infer_model_t *aura_infer_load(const char *path, aura_infer_form_t form)
                   aura_infer_form_name(form), path);
         return NULL;
     }
+    if (group == nullptr) {
+        group = g_default_group;
+    }
 
     uint64_t t0 = aura_osal_time_us();
 
@@ -405,11 +482,15 @@ aura_infer_model_t *aura_infer_load(const char *path, aura_infer_form_t form)
     snprintf(m->path, sizeof(m->path), "%s", path);
     m->form    = form;
     m->session = NULL;
+    m->group   = group;
 
     bool ok = (form == AURA_INFER_FORM_SESSION) ? load_session(m.get(), path)
                                                 : load_module(m.get(), path);
     if (!ok) {
         return NULL;
+    }
+    if (form == AURA_INFER_FORM_MODULE) {
+        group->module_count++;
     }
 
     /* 运行时内存（MB → bytes） */
@@ -417,7 +498,7 @@ aura_infer_model_t *aura_infer_load(const char *path, aura_infer_form_t form)
     if (form == AURA_INFER_FORM_SESSION
             ? (m->net->getSessionInfo(m->session, MNN::Interpreter::MEMORY, &mem_mb) &&
                mem_mb > 0)
-            : (g_state.rtmgr->getInfo(MNN::Interpreter::MEMORY, &mem_mb) && mem_mb > 0)) {
+            : (group->rtmgr->getInfo(MNN::Interpreter::MEMORY, &mem_mb) && mem_mb > 0)) {
         m->info.runtime_bytes = (uint64_t)(mem_mb * 1024.f * 1024.f);
     }
     m->info.input_count  = (int32_t)m->inputs.size();
@@ -434,13 +515,18 @@ aura_infer_model_t *aura_infer_load(const char *path, aura_infer_form_t form)
         fclose(fp);
     }
 
-    AURA_LOGI(TAG, "loaded %s: in=%d out=%d runtime=%llu MB load=%llu ms",
+    AURA_LOGI(TAG, "loaded %s: in=%d out=%d runtime=%llu MB load=%llu ms (group %u)",
               path, m->info.input_count, m->info.output_count,
               (unsigned long long)(m->info.runtime_bytes >> 20),
-              (unsigned long long)(m->info.load_us / 1000));
+              (unsigned long long)(m->info.load_us / 1000), group->group_id);
 
     engine_models().push_back(m.get());
     return m.release();
+}
+
+aura_infer_model_t *aura_infer_load(const char *path, aura_infer_form_t form)
+{
+    return aura_infer_load_in_group(g_default_group, path, form);
 }
 
 aura_err_t aura_infer_unload(aura_infer_model_t *model)
@@ -448,10 +534,145 @@ aura_err_t aura_infer_unload(aura_infer_model_t *model)
     if (model == NULL) {
         return AURA_ERR_INVALID_ARG;
     }
+    if (model->form == AURA_INFER_FORM_MODULE && model->group != nullptr &&
+        model->group->module_count > 0) {
+        model->group->module_count--;
+    }
+    /* 销毁 Module 同样走 Express 全局状态（释放内存会竞争全局资源）。 */
+    if (model->form == AURA_INFER_FORM_MODULE && model->group != nullptr) {
+        std::lock_guard<std::mutex> guard(model->group->run_lock);
+        std::lock_guard<std::mutex> express_guard(g_express_lock);
+        model->module.reset();
+    }
     engine_models().erase(std::remove(engine_models().begin(), engine_models().end(), model),
                           engine_models().end());
     delete model;
     return AURA_OK;
+}
+
+/* ------------------------------------------------------------ 模型元数据 */
+
+/* 取 metadata 的原始字符串。MODULE 形态才有（见 inference.h 的说明）。 */
+static aura_err_t meta_lookup(const aura_infer_model_t *model, const char *key,
+                              std::string *out)
+{
+    if (model == nullptr || key == nullptr || out == nullptr) {
+        return AURA_ERR_INVALID_ARG;
+    }
+    if (model->form != AURA_INFER_FORM_MODULE || model->module == nullptr) {
+        /* SESSION 的 Interpreter 只暴露 version，没有 metadata 接口。 */
+        return AURA_ERR_UNSUPPORTED;
+    }
+    const Express::Module::Info *mi = model->module->getInfo();
+    if (mi == nullptr) {
+        return AURA_ERR_STATE;
+    }
+    auto it = mi->metaData.find(key);
+    if (it == mi->metaData.end()) {
+        return AURA_ERR_NOT_FOUND;
+    }
+    *out = it->second;
+    return AURA_OK;
+}
+
+aura_err_t aura_model_meta(const aura_infer_model_t *model, const char *key, char *out,
+                           uint32_t cap)
+{
+    if (out == nullptr || cap == 0) {
+        return AURA_ERR_INVALID_ARG;
+    }
+    std::string v;
+    aura_err_t rc = meta_lookup(model, key, &v);
+    if (rc != AURA_OK) {
+        return rc;
+    }
+    if (v.size() + 1 > cap) {
+        return AURA_ERR_INVALID_ARG; /* 不截断：半个值比没有更坏 */
+    }
+    memcpy(out, v.c_str(), v.size() + 1);
+    return AURA_OK;
+}
+
+int32_t aura_model_meta_count(const aura_infer_model_t *model)
+{
+    if (model == nullptr || model->form != AURA_INFER_FORM_MODULE || model->module == nullptr) {
+        return 0;
+    }
+    const Express::Module::Info *mi = model->module->getInfo();
+    return (mi == nullptr) ? 0 : (int32_t)mi->metaData.size();
+}
+
+aura_err_t aura_model_meta_at(const aura_infer_model_t *model, int32_t idx, char *key,
+                              uint32_t key_cap, char *val, uint32_t val_cap)
+{
+    if (key == nullptr || val == nullptr || key_cap == 0 || val_cap == 0 || idx < 0) {
+        return AURA_ERR_INVALID_ARG;
+    }
+    if (model == nullptr || model->form != AURA_INFER_FORM_MODULE || model->module == nullptr) {
+        return AURA_ERR_UNSUPPORTED;
+    }
+    const Express::Module::Info *mi = model->module->getInfo();
+    if (mi == nullptr) {
+        return AURA_ERR_STATE;
+    }
+    if (idx >= (int32_t)mi->metaData.size()) {
+        return AURA_ERR_NOT_FOUND;
+    }
+    /* std::map 按 key 有序 —— 探针输出因此是稳定的，两次跑不会换顺序。 */
+    auto it = mi->metaData.begin();
+    std::advance(it, idx);
+    if (it->first.size() + 1 > key_cap || it->second.size() + 1 > val_cap) {
+        return AURA_ERR_INVALID_ARG; /* 同 aura_model_meta：不截断 */
+    }
+    memcpy(key, it->first.c_str(), it->first.size() + 1);
+    memcpy(val, it->second.c_str(), it->second.size() + 1);
+    return AURA_OK;
+}
+
+int32_t aura_model_meta_i32(const aura_infer_model_t *model, const char *key, int32_t def)
+{
+    std::string v;
+    if (meta_lookup(model, key, &v) != AURA_OK) {
+        return def;
+    }
+    char  *end = nullptr;
+    long   r   = strtol(v.c_str(), &end, 10);
+    if (end == v.c_str()) {
+        return def; /* 非数字（空串、"zipformer" 之类） */
+    }
+    return (int32_t)r;
+}
+
+int32_t aura_model_meta_i32vec(const aura_infer_model_t *model, const char *key, int32_t *out,
+                               int32_t max)
+{
+    if (out == nullptr || max <= 0) {
+        return 0;
+    }
+    std::string v;
+    if (meta_lookup(model, key, &v) != AURA_OK) {
+        return 0;
+    }
+    /* sherpa 的向量键是逗号分隔（SplitStringToIntegers(value, ",", ...)），
+     * 兼容空格/分号 —— 不同转换器版本的写法不完全一致，宽进严出。 */
+    int32_t n     = 0;
+    const char *p = v.c_str();
+    while (*p != '\0' && n < max) {
+        while (*p == ',' || *p == ' ' || *p == ';' || *p == '\t') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        char *end = nullptr;
+        long  r   = strtol(p, &end, 10);
+        if (end == p) {
+            break; /* 遇到非数字（如 "192x"）：后面的值不可信，就此打住 */
+        }
+        out[n++] = (int32_t)r;
+        p        = end;
+    }
+    return n;
 }
 
 aura_err_t aura_model_get_info(const aura_infer_model_t *model, aura_model_info_t *out)
@@ -552,6 +773,8 @@ aura_err_t aura_tensor_resize(aura_tensor_t *t, const int32_t *dims, int32_t dim
         if (!t->is_input) {
             return AURA_ERR_INVALID_ARG;
         }
+        /* _Input 创建也走 Express 的全局状态（见 g_express_lock 的注释） */
+        std::lock_guard<std::mutex> express_guard(g_express_lock);
         t->var = make_input_var(dims, dim_count, t->info.dtype);
         if (t->var == nullptr) {
             return AURA_ERR_FAIL;
@@ -706,6 +929,20 @@ aura_err_t aura_model_run(aura_infer_model_t *model)
     if (model == NULL) {
         return AURA_ERR_INVALID_ARG;
     }
+    if (model->group == nullptr) {
+        return AURA_ERR_STATE;
+    }
+
+    /* 同组前向串行 + 全局 Express 锁。
+     * MNN 官方多线程契约的两种做法：每线程一个 Executor + ExecutorScope +
+     * Module::clone（我们试过在组内嵌 Executor 绑定 scope —— 输入 VARP 建在
+     * Executor 池、模块执行在 RuntimeManager，跨池接错，KWS 单链直接不命中，
+     * 已回退；clone 模式需要更深的重构，列入 backlog），或"对**所有**
+     * Express 调用加全局互斥锁"（正确但失去并行收益）—— 就是这里。
+     * 代价是组间前向互相等待：靠引擎特征环的大缓冲（T+16×shift）吸收
+     * 下游 worker 批量解码时对 SYNC 节点的饿死。 */
+    std::lock_guard<std::mutex> guard(model->group->run_lock);
+    std::lock_guard<std::mutex> express_guard(g_express_lock);
 
     if (model->form == AURA_INFER_FORM_MODULE) {
         if (model->module == nullptr) {
@@ -755,13 +992,9 @@ aura_err_t aura_infer_memory_stats(uint64_t *current_bytes, uint64_t *peak_bytes
         return AURA_ERR_INVALID_ARG;
     }
     uint64_t total = 0;
-    bool have_module = false;
+    /* SESSION：逐个 session 问（每个 session 的内存由所属组的 Runtime 池调度）。 */
     for (auto *m : engine_models()) {
-        if (m->form == AURA_INFER_FORM_MODULE) {
-            have_module = true; /* 所有 Module 共用一份 RuntimeManager，最后只加一次 */
-            continue;
-        }
-        if (m->session == NULL) {
+        if (m->form != AURA_INFER_FORM_SESSION || m->session == NULL) {
             continue;
         }
         float mem_mb = 0.f;
@@ -770,9 +1003,13 @@ aura_err_t aura_infer_memory_stats(uint64_t *current_bytes, uint64_t *peak_bytes
             total += (uint64_t)(mem_mb * 1024.f * 1024.f);
         }
     }
-    if (have_module && g_state.rtmgr != nullptr) {
+    /* MODULE：内存记在组上，同组多个 Module 只算一次。 */
+    for (auto *g : engine_groups()) {
+        if (g->module_count == 0 || g->rtmgr == nullptr) {
+            continue;
+        }
         float mem_mb = 0.f;
-        if (g_state.rtmgr->getInfo(MNN::Interpreter::MEMORY, &mem_mb) && mem_mb > 0) {
+        if (g->rtmgr->getInfo(MNN::Interpreter::MEMORY, &mem_mb) && mem_mb > 0) {
             total += (uint64_t)(mem_mb * 1024.f * 1024.f);
         }
     }
