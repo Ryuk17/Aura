@@ -64,6 +64,27 @@ add_library(aura_dsp STATIC
 )
 target_link_libraries(aura_dsp PUBLIC aura_core)
 
+# FFT 与 fbank：KWS/ASR/声纹共用的前端特征。放在 dsp 层，但**不**依赖 core ——
+# 它们是纯计算，只有 utils 的错误码和日志，离线工具（tools/、tests/）也能直接
+# 拿去用，不必为了算一帧特征先把 pipeline 拉起来。
+#
+# aura_fft 是唯一能看见 NE10 头的地方（链接 NE10 用的是 PRIVATE —— 把那堆
+# NE10_*.h 泄漏给上层，就等于允许别人绕过这里直接用 FFT）。
+if(AURA_WITH_NEON_FFT)
+	add_library(aura_fft STATIC dsp/aura_fft.c)
+	target_link_libraries(aura_fft PUBLIC aura_utils PRIVATE aura_neon_fft)
+
+	# 特征流水线（WeNet 的 Fbank + FeaturePipeline，见 dsp/aura_feature_pipeline.h）：
+	# 攒帧、切帧、开头的镜像前缀、以及一个给下游读特征的非阻塞队列都在里面。
+	# KWS / ASR / 声纹三条链共用它一个实例（各自一份），不各算一遍。
+	# aura_feature.{h,cpp} 是它的纯 C 封装（算法节点用）。
+	add_library(aura_feature STATIC
+		dsp/aura_feature_pipeline.cc
+		dsp/aura_feature.cpp
+	)
+	target_link_libraries(aura_feature PUBLIC aura_fft)
+endif()
+
 if(AURA_WITH_TRICKROOM)
 	# 六张描述表对应的六个引擎库：aec3 / bf / ns / agc / src（+ vad，Phase 1 已在用）
 	foreach(ae_target AE_AEC AE_BF AE_NS AE_AGC AE_SRC AE_VAD)
@@ -115,6 +136,52 @@ if(AURA_WITH_MNN)
 		algorithm/aura_nn_adapter.c
 	)
 	target_link_libraries(aura_algorithm PUBLIC aura_core PUBLIC aura_inference)
+endif()
+
+# ------------------------------------------------------ kws / asr（感知算法族）
+# 算法族与模板分库：一张描述表 + 算法逻辑，模板是骨架。上层（应用/测试）
+# 在 agent init 前调 aura_kws_register() / aura_asr_register() 注册。
+if(AURA_WITH_MNN AND AURA_WITH_NEON_FFT)
+	add_library(aura_kws STATIC
+		kws/aura_kws.c
+	)
+	target_link_libraries(aura_kws PUBLIC aura_algorithm aura_zipformer)
+
+	add_library(aura_asr STATIC
+		asr/aura_asr.c
+	)
+	target_link_libraries(aura_asr PUBLIC aura_algorithm aura_zipformer)
+
+	add_library(aura_voiceprint STATIC
+		voiceprint/aura_voiceprint.c
+		voiceprint/vp_lib.c
+	)
+	target_link_libraries(aura_voiceprint PUBLIC aura_algorithm aura_feature
+		aura_inference)
+
+	# silero VAD 描述表（从 tests/host_sim 搬进正式模块）
+	add_library(aura_silero STATIC
+		audio/vad/aura_silero.c
+	)
+	target_link_libraries(aura_silero PUBLIC aura_algorithm)
+endif()
+
+# ------------------------------------------------- zipformer 族（KWS/ASR 共用）
+# 辅助件（纯 C、零 MNN 依赖）：symbol_table（tokens.txt 解析）与 context_graph
+# （关键词 AC 自动机）—— 离线工具与测试不用拉起推理就能用。
+add_library(aura_zipformer_util STATIC
+	dsp/zipformer/symbol_table.c
+	dsp/zipformer/context_graph.c
+)
+target_link_libraries(aura_zipformer_util PUBLIC aura_utils)
+
+# 流式引擎：纯 C、只依赖 inference 的 C 接口，不碰 core/pipeline。
+if(AURA_WITH_MNN AND AURA_WITH_NEON_FFT)
+	add_library(aura_zipformer STATIC
+		dsp/zipformer/aura_zipformer.c
+	)
+	target_link_libraries(aura_zipformer PUBLIC aura_inference aura_feature
+		aura_zipformer_util)
 endif()
 
 # ------------------------------------------------------ agent（闭环组装层）

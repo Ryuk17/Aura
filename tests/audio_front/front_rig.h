@@ -84,9 +84,12 @@ static inline aura_err_t front_rig_run(front_rig_t *rig, const char *conf_path, 
     pc.sample_rate = cfg.sample_rate;
     pc.frame_ms    = cfg.frame_ms;
     pc.channels    = cfg.channels;
-    /* 扇出成倍消耗帧池：探针链上同一帧同时在途"链长 × 扇出"份，默认 16 块会以
-     * frames_dropped 的形式丢帧（不报错，只让所有指标悄悄偏掉）。 */
-    pc.frame_pool_blocks = 32;
+    /* 扇出成倍消耗帧池：探针链上同一帧同时在途"链长 × 扇出"份。默认 16 块会以
+     * frames_dropped 的形式丢帧（不报错，只让所有指标悄悄偏掉）。
+     * 64 = 更宽裕的上界：负载高（整套 ctest 并行、前面刚跑完 MNN 测试）时
+     * 节点任务调度变慢，在途帧可以顶到 32+ —— 实测 32 块会池耗尽喂帧失败。
+     * 治本（feed 分配超时走背压）见 docs/todo.md 4.2 的 backlog。 */
+    pc.frame_pool_blocks = 64;
 
     rig->pipe = aura_pipeline_create(&pc);
     if (rig->pipe == NULL) {

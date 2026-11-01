@@ -25,8 +25,9 @@ extern "C" {
 #define AURA_CONFIG_MAX_CHAIN_PARAMS 32
 
 typedef struct aura_config_kv {
-    char key[48]; /* "<algo>.<key>"，即 chain_param_ 之后的部分 */
-    char val[64];
+    char key[48];  /* "<algo>.<key>"，即 chain_param_ 之后的部分 */
+    char val[256]; /* 值：数值的文本或路径 —— 路径类参数（模型文件/词表）
+                    * 64 字节装不下（实测 keywords 文件相对路径 65 字符） */
 } aura_config_kv_t;
 
 /* 全框架运行时配置。字段按"链路 → 队列 → 状态机 → 路径"分组。 */

@@ -42,7 +42,7 @@ static const char *const type_names[AURA_EVENT_TYPE_COUNT] = {
     "vad_end",      "voiceprint",    "asr_partial",    "asr_final",
     "llm_first",    "llm_token",     "llm_done",       "tts_first",
     "tts_done",     "playback_start", "playback_stop", "barge_in",
-    "silence_timeout", "error",      "user",
+    "silence_timeout", "error",      "user",           "nn_result",
 };
 
 const char *aura_event_type_name(aura_event_type_t type)
@@ -115,7 +115,11 @@ aura_event_bus_t *aura_event_bus_create(uint32_t queue_depth)
         return NULL;
     }
     bus->running = true;
-    bus->task    = aura_osal_task_create("evbus", 4096, 5, event_bus_task, bus);
+    /* 栈从 4KB 提到 16KB：订阅回调（算法的 on_event）都在这条任务上跑 ——
+     * 4KB 连一个带结果的回调（NN_RESULT drain + result_consume 的局部变量）
+     * 都嫌紧，栈爆是段错误而不是干净的报错。16KB 是"算法回调不得放 >4KB
+     * 局部变量"这一约定的余量上限（大对象必须走 state/堆，见声纹节点）。 */
+    bus->task    = aura_osal_task_create("evbus", 16384, 5, event_bus_task, bus);
     if (bus->task == NULL) {
         bus->running = false;
         aura_event_bus_destroy(bus);

@@ -28,7 +28,38 @@ if(AURA_BUILD_TESTS)
 	target_link_libraries(test_dsp_adapter PRIVATE aura_dsp aura_core aura_utils aura_platform)
 	target_include_directories(test_dsp_adapter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 	add_test(NAME test_dsp_adapter COMMAND test_dsp_adapter)
-	set_tests_properties(test_dsp_adapter PROPERTIES TIMEOUT 60)
+	# RUN_SERIAL：VAD 边沿断言依赖事件分发的时序，与 MNN 模型测试并行时
+	# CPU 被抢占会滞后一帧（实测 frames_in 2 != 3），单跑必过（audio_front 同类）。
+	set_tests_properties(test_dsp_adapter PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+
+	# zipformer 辅助件（context_graph/symbol_table）自检：纯 C 零依赖，不拖 MNN。
+	add_executable(test_zipformer_util unit/test_zipformer_util.c)
+	target_link_libraries(test_zipformer_util PRIVATE
+		aura_zipformer_util aura_utils aura_platform)
+	target_include_directories(test_zipformer_util PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+	if(NOT MSVC)
+		# 与 test_fbank/test_zipformer 同理：aura_test.h 的 constructor 优先级告警
+		# 与 sleep_ms 未引用。
+		target_compile_options(test_zipformer_util PRIVATE
+			-Wno-prio-ctor-dtor -Wno-unused-function)
+	endif()
+	add_test(NAME test_zipformer_util COMMAND test_zipformer_util)
+	set_tests_properties(test_zipformer_util PROPERTIES TIMEOUT 60)
+
+	if(AURA_WITH_NEON_FFT)
+		# fbank 前端自检。测试本身是 C++（FeaturePipeline 的 C 封装还没到用武之地，
+		# 先直接测 C++ 实现），不能走 aura_add_test 的 .c 假设，单独写。
+		add_executable(test_fbank unit/test_fbank.cpp)
+		target_link_libraries(test_fbank PRIVATE aura_feature aura_fft aura_utils aura_platform)
+		target_include_directories(test_fbank PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+		# aura_test.h 是给 .c 写的（constructor 优先级告警是 C++ 独有的；
+		# 本文件不用 aura_test_sleep_ms）。框架本身不动，在这里点掉。
+		if(NOT MSVC)
+			target_compile_options(test_fbank PRIVATE -Wno-prio-ctor-dtor -Wno-unused-function)
+		endif()
+		add_test(NAME test_fbank COMMAND test_fbank)
+		set_tests_properties(test_fbank PROPERTIES TIMEOUT 60)
+	endif()
 	if(AURA_WITH_MNN)
 		aura_add_test(test_inference)
 		# NN 适配模板单测：用**无模型算法**（desc 不声明 model_file）驱动适配层 ——
@@ -36,6 +67,83 @@ if(AURA_BUILD_TESTS)
 		# 真模型（silero VAD）的接入由 host_sim --use-silero 覆盖。
 		aura_add_test(test_nn_adapter)
 		target_link_libraries(test_nn_adapter PRIVATE aura_algorithm)
+
+		if(AURA_WITH_NEON_FFT)
+			# zipformer2 引擎冒烟：模型在 models/（不入库）时真跑，缺失 SKIP。
+			add_executable(test_zipformer unit/test_zipformer.c)
+			target_link_libraries(test_zipformer PRIVATE
+				aura_zipformer aura_inference aura_utils aura_platform)
+			target_include_directories(test_zipformer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+			target_compile_definitions(test_zipformer PRIVATE
+				AURA_HOST_SIM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+			# AURA_TEST 的 constructor 优先级取 __LINE__，本文件第一个测试在 100 行
+			# 以内 → prio-ctor-dtor 告警；sleep_ms 未被引用。与 test_fbank 同理点掉。
+			if(NOT MSVC)
+				target_compile_options(test_zipformer PRIVATE
+					-Wno-prio-ctor-dtor -Wno-unused-function)
+			endif()
+			add_test(NAME test_zipformer COMMAND test_zipformer)
+			set_tests_properties(test_zipformer PROPERTIES TIMEOUT 120)
+
+			# KWS 唤醒链（真模型 + 模型自带音频）：行为级验收，见 kws_chain/。
+			# RUN_SERIAL：真模型推理 + 实时节奏喂帧，避开并行 CPU 争抢（audio_front 同款）。
+			add_executable(test_kws_chain kws_chain/test_kws_chain.c)
+			target_link_libraries(test_kws_chain PRIVATE
+				aura_kws aura_algorithm aura_inference aura_core aura_utils aura_platform)
+			target_include_directories(test_kws_chain PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+			target_compile_definitions(test_kws_chain PRIVATE
+				AURA_HOST_SIM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+			if(NOT MSVC)
+				target_compile_options(test_kws_chain PRIVATE
+					-Wno-prio-ctor-dtor -Wno-unused-function)
+			endif()
+			add_test(NAME test_kws_chain COMMAND test_kws_chain)
+			set_tests_properties(test_kws_chain PROPERTIES TIMEOUT 600 RUN_SERIAL TRUE)
+
+			# ASR 流式识别链（真模型 + 语音素材）：partial/final 流 + 文本面断言。
+			add_executable(test_asr_chain asr_chain/test_asr_chain.c)
+			target_link_libraries(test_asr_chain PRIVATE
+				aura_asr aura_algorithm aura_inference aura_core aura_utils aura_platform)
+			target_include_directories(test_asr_chain PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+			target_compile_definitions(test_asr_chain PRIVATE
+				AURA_HOST_SIM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+			if(NOT MSVC)
+				target_compile_options(test_asr_chain PRIVATE
+					-Wno-prio-ctor-dtor -Wno-unused-function)
+			endif()
+			add_test(NAME test_asr_chain COMMAND test_asr_chain)
+			set_tests_properties(test_asr_chain PROPERTIES TIMEOUT 600 RUN_SERIAL TRUE)
+
+			# 声纹注册/验证链（真模型 + 语音素材）。
+			add_executable(test_voiceprint voiceprint/test_voiceprint.c)
+			target_link_libraries(test_voiceprint PRIVATE
+				aura_voiceprint aura_algorithm aura_inference aura_core aura_utils
+				aura_platform)
+			target_include_directories(test_voiceprint PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+			target_compile_definitions(test_voiceprint PRIVATE
+				AURA_HOST_SIM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+			if(NOT MSVC)
+				target_compile_options(test_voiceprint PRIVATE
+					-Wno-prio-ctor-dtor -Wno-unused-function)
+			endif()
+			add_test(NAME test_voiceprint COMMAND test_voiceprint)
+			set_tests_properties(test_voiceprint PROPERTIES TIMEOUT 600 RUN_SERIAL TRUE)
+
+			# Phase 3 全链路串通（真模型 ×4 + 状态机）。
+			add_executable(test_voice_chain voice_chain/test_voice_chain.c)
+			target_link_libraries(test_voice_chain PRIVATE
+				aura_agent aura_silero aura_kws aura_voiceprint aura_asr
+				aura_algorithm aura_inference aura_core aura_utils aura_platform)
+			target_include_directories(test_voice_chain PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+			target_compile_definitions(test_voice_chain PRIVATE
+				AURA_HOST_SIM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+			if(NOT MSVC)
+				target_compile_options(test_voice_chain PRIVATE
+					-Wno-prio-ctor-dtor -Wno-unused-function)
+			endif()
+			add_test(NAME test_voice_chain COMMAND test_voice_chain)
+			set_tests_properties(test_voice_chain PROPERTIES TIMEOUT 600 RUN_SERIAL TRUE)
+		endif()
 	endif()
 endif()
 
@@ -60,7 +168,11 @@ if(AURA_WITH_TRICKROOM)
 		)
 		add_test(NAME ${name} COMMAND ${name})
 		# AEC3 对 6 秒音频要跑几秒（Release）；给足余量，别让它偶发超时。
-		set_tests_properties(${name} PROPERTIES TIMEOUT 300)
+		# RUN_SERIAL：这是**实时节奏**的 DSP 链（喂帧按 10ms 节拍 + 收尾按队列
+		# 排空判定），与 MNN 模型测试并行时 CPU 被抢占，出现过两类假失败：
+		# ① AGC 尾部 2 帧未在 stop 前 flush（641 != 643）；② 喂参考帧踩到池背压
+		# 上限报 OOM。单跑全过 —— 是负载敏感，不是链坏了。排到并行组之后跑。
+		set_tests_properties(${name} PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
 	endfunction()
 
 	aura_add_front_test(test_audio_debug audio_front)
@@ -89,7 +201,8 @@ if(AURA_WITH_TRICKROOM)
 				--out-dir ${CMAKE_CURRENT_BINARY_DIR}/audio_front/synth_out
 				--check)
 		set_tests_properties(audio_debug_synth PROPERTIES
-			TIMEOUT 300 FIXTURES_REQUIRED aura_synth_scene)
+			TIMEOUT 300 FIXTURES_REQUIRED aura_synth_scene
+			RUN_SERIAL TRUE) # 同上：实时节奏链，避开并行负载
 	endif()
 endif()
 
@@ -101,7 +214,7 @@ if(AURA_BUILD_HOST_SIM)
 	)
 	target_link_libraries(host_sim PRIVATE aura_agent aura_core aura_utils aura_platform)
 	if(AURA_WITH_MNN)
-		target_link_libraries(host_sim PRIVATE aura_inference)
+		target_link_libraries(host_sim PRIVATE aura_inference aura_silero)
 	endif()
 	target_include_directories(host_sim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 	target_compile_definitions(host_sim PRIVATE
@@ -120,3 +233,11 @@ if(AURA_BUILD_HOST_SIM)
 		set_tests_properties(host_sim_silero PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
 	endif()
 endif()
+
+# ------------------------------------------------------------------- 测试串行
+# 全套串行执行（用户拍板 2026-11-01）：产品运行时真正需要的并行只有 NN_ASYNC
+# 的 worker（ASR/声纹的大推理），与测试无关；而 ctest -j 的并行 CPU 抢占制造
+# 三类假 flake —— ① audio_front 帧池耗尽；② dsp_adapter VAD 边沿滞后一帧；
+# ③ kws_chain 喂帧/解码超时。串行总时长 ~4 分钟，红了就是真红。
+get_property(_aura_all_tests DIRECTORY PROPERTY TESTS)
+set_tests_properties(${_aura_all_tests} PROPERTIES RUN_SERIAL TRUE)
