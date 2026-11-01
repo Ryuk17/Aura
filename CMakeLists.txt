@@ -41,6 +41,9 @@ option(AURA_BUILD_NET        "编译网络传输模块"            OFF)
 option(AURA_WITH_MNN         "启用 MNN 推理引擎（FetchContent）" ON)
 option(AURA_WITH_MNN_LLM     "启用 MNN-LLM 管线（Phase 4，构建耗时大）" OFF)
 option(AURA_WITH_TRICKROOM   "启用 TrickRoom 3A 引擎（Phase 2，super-build）" ON)
+# 语音前端的 FFT（NE10）。纯 C、无外部依赖，KWS/ASR/声纹的 fbank 都靠它；
+# 关掉等于前端特征提取编不出来，一般只在交叉编译排障时用。
+option(AURA_WITH_NEON_FFT    "启用 NE10 FFT（fbank 依赖，FetchContent）" ON)
 
 option(AURA_BUILD_TESTS      "构建单元测试"       ON)
 option(AURA_BUILD_HOST_SIM   "构建 PC 全链路仿真" ON)
@@ -65,6 +68,12 @@ if(AURA_WITH_MNN)
 	include(cmake/mnn.cmake)
 else()
 	message(STATUS "Aura: MNN disabled (AURA_WITH_MNN=OFF) — inference 层将不可用")
+endif()
+
+# NE10 必须在 TrickRoom **之前**：TrickRoom 内部也 FetchContent 同名依赖，
+# 我们先把源码 populate 好，它就复用不再下载（见 cmake/neon_fft.cmake 的说明）。
+if(AURA_WITH_NEON_FFT)
+	include(cmake/neon_fft.cmake)
 endif()
 
 if(AURA_WITH_TRICKROOM)
