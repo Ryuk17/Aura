@@ -20,3 +20,4 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 ./hfd.sh Jeryuk/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common-MNN --local-dir speaker_recognition/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common-MNN
 
+./hfd.sh Jeryuk/kws-zipformer-wenetspeech-3.3M-MNN --local-dir speaker_recognition/kws-zipformer-wenetspeech-3.3M-MNN
