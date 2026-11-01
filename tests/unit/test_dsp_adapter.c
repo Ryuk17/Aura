@@ -6,6 +6,7 @@
  */
 #include "aura_test.h"
 
+#include "aura_event_log.h"
 #include "core/algorithm.h"
 #include "core/pipeline/pipeline.h"
 #include "dsp/aura_dsp_adapter.h"
@@ -455,12 +456,16 @@ static void test_vad_flag_edges(void)
     const uint32_t vad_mask =
         (1u << AURA_EVENT_VAD_SPEECH_START) | (1u << AURA_EVENT_VAD_SPEECH_END);
 
+    /* 先订阅再喂数据：反过来必然和节点任务抢时序（见 aura_event_log.h）。 */
+    aura_event_log_t log;
+    AURA_ASSERT_EQ(aura_event_log_init(&log, bus, vad_mask), AURA_OK);
+
     /* 连续 3 帧"有语音"：只应产生 1 次上升沿 + 1 个事件（只发边沿，不发每帧） */
     engine_at(1)->vad_flag = 1;
     feed_pts(p, 3, 0);
-    aura_event_t ev;
-    AURA_ASSERT_EQ(aura_event_bus_wait(bus, vad_mask, &ev, 2000), AURA_OK);
-    AURA_ASSERT_EQ(ev.type, AURA_EVENT_VAD_SPEECH_START);
+    AURA_ASSERT_EQ(aura_event_log_wait(&log, 1, 2000), AURA_OK);
+    AURA_ASSERT_EQ(log.count, 1); /* 3 帧只发 1 个事件，不是 3 个 */
+    AURA_ASSERT_EQ(log.ev[0].type, AURA_EVENT_VAD_SPEECH_START);
 
     aura_dsp_stats_t sv;
     AURA_ASSERT_EQ(aura_dsp_get_stats(nodes[1], &sv), AURA_OK);
@@ -472,8 +477,9 @@ static void test_vad_flag_edges(void)
     /* 转为静音 → 下降沿 */
     engine_at(1)->vad_flag = 0;
     feed_pts(p, 2, 0);
-    AURA_ASSERT_EQ(aura_event_bus_wait(bus, vad_mask, &ev, 2000), AURA_OK);
-    AURA_ASSERT_EQ(ev.type, AURA_EVENT_VAD_SPEECH_END);
+    AURA_ASSERT_EQ(aura_event_log_wait(&log, 2, 2000), AURA_OK);
+    AURA_ASSERT_EQ(log.count, 2);
+    AURA_ASSERT_EQ(log.ev[1].type, AURA_EVENT_VAD_SPEECH_END);
     AURA_ASSERT_EQ(aura_dsp_get_stats(nodes[1], &sv), AURA_OK);
     AURA_ASSERT_EQ(sv.flag_fall, 1);
     AURA_ASSERT_EQ(sv.flag_rise, 1);
@@ -484,6 +490,7 @@ static void test_vad_flag_edges(void)
     AURA_ASSERT_EQ(aura_dsp_get_stats(nodes[2], &s2), AURA_OK);
     AURA_ASSERT_EQ(s2.frames_in, 5);
 
+    aura_event_log_fini(&log);
     teardown(p, nodes, n);
 }
 

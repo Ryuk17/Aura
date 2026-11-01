@@ -139,7 +139,16 @@ bool aura_nn_flag(const aura_nn_node_t *self)
     return (self != NULL) && self->flag_valid && (self->last_flag != 0);
 }
 
-/* 边沿检测 + 发事件。与 dsp_handle_flag 同形：只发边沿，每帧发会刷爆总线。 */
+/* 边沿检测 + 发事件。与 dsp_handle_flag 同形：只发边沿，每帧发会刷爆总线。
+ *
+ * 事件**带上音频 pts**（u.audio.pts_us）：下游按时间切片全靠它 —— 声纹要从
+ * PCM 环里切出"这一句"、KWS_HIT 要能报唤醒时刻，都依赖 VAD 边沿知道自己
+ * 对应哪一段音频。只发 type+code 的话下游只能"从收到事件开始攒"，
+ * 于是每个消费者各写一遍对不齐的近似。
+ *
+ * 取当前输入帧的 pts 作为窗尾近似：infer_out 在 process_audio 上下文里跑
+ * （SYNC 路径），last_in_pts_us 是本帧的；对 512 样本的窗来说误差 ≤32ms，
+ * 而消费方关心的是几百 ms 量级的段落边界。 */
 void aura_nn_report(aura_nn_node_t *self, bool hit)
 {
     if (self == NULL) {
@@ -161,8 +170,31 @@ void aura_nn_report(aura_nn_node_t *self, bool hit)
 
     int type = rise ? self->desc->flag_rise_type : self->desc->flag_fall_type;
     if (type != AURA_EVENT_NONE) {
-        aura_node_post_event(&self->base, type, v);
+        aura_event_t ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.type           = (aura_event_type_t)type;
+        ev.code           = v;
+        ev.u.audio.pts_us = AURA_PTS_AUTO; /* 代填为当前输入帧的 pts */
+        (void)aura_node_emit_event(&self->base, &ev);
     }
+}
+
+/* 发一个带值的事件（KWS 命中分数、声纹相似度等），**不做边沿检测**。
+ * 与 aura_nn_report 的分工：那个是"标志位"，这个是"一次性的结果"，
+ * 每次都发（KWS 连续命中两次是两件事，不能像 VAD 标志那样去重）。 */
+void aura_nn_emit(aura_nn_node_t *self, int type, const aura_event_t *ev)
+{
+    if (self == NULL || ev == NULL || type == AURA_EVENT_NONE) {
+        return;
+    }
+    aura_event_t out = *ev;
+    out.type         = (aura_event_type_t)type;
+    if (out.u.audio.pts_us == AURA_PTS_AUTO && self->base.last_in_pts_valid) {
+        out.u.audio.pts_us = self->base.last_in_pts_us;
+    } else if (out.u.audio.pts_us == AURA_PTS_AUTO) {
+        out.u.audio.pts_us = 0; /* 没有输入帧可参照（无音频节点）：落到流起点 */
+    }
+    (void)aura_node_emit_event(&self->base, &out);
 }
 
 /* ============================== 模型路径 ============================== */
@@ -193,20 +225,111 @@ static aura_err_t nn_resolve_model_path(const aura_nn_node_t *n, char *out, size
     return AURA_OK;
 }
 
+/* ============================== NN_ASYNC ============================== */
+
+#ifndef AURA_NN_JOB_QUEUE_DEPTH_DEFAULT
+#define AURA_NN_JOB_QUEUE_DEPTH_DEFAULT 8
+#endif
+#ifndef AURA_NN_RESULT_MAX_DATA
+#define AURA_NN_RESULT_MAX_DATA 508 /* 事件 payload 上限 256 之外的结果走私有队列 */
+#endif
+#ifndef AURA_NN_RESULT_QUEUE_DEPTH
+#define AURA_NN_RESULT_QUEUE_DEPTH 8
+#endif
+
+/* 结果队列条目：{len, data}。 */
+typedef struct {
+    uint32_t len;
+    uint8_t  data[AURA_NN_RESULT_MAX_DATA];
+} nn_result_item_t;
+
+static bool nn_is_async(const aura_nn_node_t *n)
+{
+    return n->desc->kind == AURA_ALGO_KIND_NN_ASYNC;
+}
+
+/* worker 线程：弹任务 → 复位哨兵跑 algo_reset（与 process 线程无并发）、
+ * 退出哨兵收尾、真任务跑 async_run。 */
+static void nn_async_worker(void *arg)
+{
+    aura_nn_node_t *n = (aura_nn_node_t *)arg;
+    void           *job = malloc(n->desc->job_size);
+    if (job == NULL) {
+        AURA_LOGE(TAG, "%s: worker job buffer alloc failed", n->base.name);
+        return;
+    }
+
+    for (;;) {
+        if (aura_osal_queue_pop(n->job_q, job, AURA_WAIT_FOREVER) != AURA_OK) {
+            continue;
+        }
+        uint32_t magic = *(const uint32_t *)job;
+        if (magic == AURA_NN_JOB_EXIT) {
+            break;
+        }
+        if (magic == 0) {
+            /* 复位哨兵：algo_reset 在 worker 线程跑 —— 消除与 process 线程的并发改状态 */
+            if (n->desc->algo_reset != NULL) {
+                n->desc->algo_reset(n);
+            }
+            continue;
+        }
+        if (n->desc->async_run != NULL) {
+            (void)n->desc->async_run(n, job);
+        }
+    }
+    free(job);
+}
+
+/* worker 线程里投递结果（见 .h 的异步契约）。 */
+void aura_nn_post_result(aura_nn_node_t *self, const void *result, uint32_t len)
+{
+    if (self == NULL || result == NULL || len == 0 || len > AURA_NN_RESULT_MAX_DATA) {
+        return;
+    }
+    nn_result_item_t item;
+    item.len = len;
+    memcpy(item.data, result, len);
+    if (aura_osal_queue_push(self->result_q, &item, AURA_NO_WAIT) != AURA_OK) {
+        self->dropped++;
+        AURA_LOGW(TAG, "%s: result queue full, dropped", self->base.name);
+        return;
+    }
+    aura_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = AURA_EVENT_NN_RESULT;
+    snprintf(ev.payload, sizeof(ev.payload), "%s", self->base.name);
+    (void)aura_node_emit_event(&self->base, &ev);
+}
+
 /* ============================== 生命周期 ============================== */
 
 static aura_err_t nn_init(aura_node_t *self)
 {
     aura_nn_node_t *n = (aura_nn_node_t *)self;
 
+    /* 私有推理组：建在加载模型之前（模型要落进组里）。配置传 NULL = 沿用引擎
+     * 全局那份（线程数/精度档位与全链一致）。 */
+    if (n->desc->private_group) {
+        n->group = aura_infer_group_create(NULL);
+        if (n->group == NULL) {
+            AURA_LOGE(TAG, "%s: private inference group creation failed", self->name);
+            return AURA_ERR_FAIL;
+        }
+    }
+
     /* 模型在 init（= pipeline start）时加载：此时还没开闸放音频，
      * 加载耗时（首响延迟的大头）不落在音频线程上，失败也能让 start 直接报错。 */
     char path[512];
     aura_err_t rc = nn_resolve_model_path(n, path, sizeof(path));
     if (rc == AURA_OK) {
-        n->model = aura_infer_load(path, n->desc->form);
+        n->model = aura_infer_load_in_group(n->group, path, n->desc->form);
         if (n->model == NULL) {
             AURA_LOGE(TAG, "%s: load failed: %s", self->name, path);
+            if (n->group != NULL) {
+                aura_infer_group_destroy(n->group);
+                n->group = NULL;
+            }
             return AURA_ERR_MODEL;
         }
         aura_model_info_t info;
@@ -227,15 +350,90 @@ static aura_err_t nn_init(aura_node_t *self)
                 aura_infer_unload(n->model);
                 n->model = NULL;
             }
+            if (n->group != NULL) {
+                aura_infer_group_destroy(n->group);
+                n->group = NULL;
+            }
             return rc;
         }
     }
+
+    /* NN_ASYNC：任务/结果队列 + worker 线程。algo_init 之后 —— worker 一跑起来
+     * 就可能碰模型与算法状态，它们必须已就绪。 */
+    if (nn_is_async(n)) {
+        uint32_t depth = (n->desc->job_queue_depth > 0)
+                             ? n->desc->job_queue_depth
+                             : AURA_NN_JOB_QUEUE_DEPTH_DEFAULT;
+        n->job_q    = aura_osal_queue_create(depth, (uint32_t)n->desc->job_size);
+        n->result_q = aura_osal_queue_create(AURA_NN_RESULT_QUEUE_DEPTH,
+                                             sizeof(nn_result_item_t));
+        if (n->job_q == NULL || n->result_q == NULL) {
+            AURA_LOGE(TAG, "%s: async queue create failed", self->name);
+            goto async_fail;
+        }
+        n->worker = aura_osal_task_create(n->namebuf, 16384, 3, nn_async_worker, n);
+        if (n->worker == NULL) {
+            AURA_LOGE(TAG, "%s: worker task create failed", self->name);
+            goto async_fail;
+        }
+    }
     return AURA_OK;
+
+async_fail:
+    if (n->worker != NULL) {
+        aura_osal_task_destroy(n->worker);
+        n->worker = NULL;
+    }
+    if (n->job_q != NULL) {
+        aura_osal_queue_destroy(n->job_q);
+        n->job_q = NULL;
+    }
+    if (n->result_q != NULL) {
+        aura_osal_queue_destroy(n->result_q);
+        n->result_q = NULL;
+    }
+    if (n->desc->algo_deinit != NULL) {
+        n->desc->algo_deinit(n);
+    }
+    if (n->model != NULL) {
+        aura_infer_unload(n->model);
+        n->model = NULL;
+    }
+    if (n->group != NULL) {
+        aura_infer_group_destroy(n->group);
+        n->group = NULL;
+    }
+    return AURA_ERR_NOMEM;
 }
 
 static aura_err_t nn_stop(aura_node_t *self)
 {
     aura_nn_node_t *n = (aura_nn_node_t *)self;
+
+    /* ASYNC：退出哨兵 + join（worker 可能正在跑模型，必须先于 unload 收尾）。
+     * 哨兵必须是**完整的 job_size 字节**：队列按 item_size 拷贝，只给 4 字节
+     * 会让 push 越界读（96KB 的 job 队列读 4 字节的栈变量 → 段错误）。 */
+    if (nn_is_async(n) && n->worker != NULL) {
+        if (n->job_q != NULL) {
+            void *exit_buf = calloc(1, n->desc->job_size);
+            if (exit_buf != NULL) {
+                *(uint32_t *)exit_buf = AURA_NN_JOB_EXIT;
+                (void)aura_osal_queue_push(n->job_q, exit_buf, AURA_WAIT_FOREVER);
+                free(exit_buf);
+            }
+        }
+        aura_osal_task_join(n->worker, 30000);
+        aura_osal_task_destroy(n->worker);
+        n->worker = NULL;
+    }
+    if (n->job_q != NULL) {
+        aura_osal_queue_destroy(n->job_q);
+        n->job_q = NULL;
+    }
+    if (n->result_q != NULL) {
+        aura_osal_queue_destroy(n->result_q);
+        n->result_q = NULL;
+    }
 
     if (n->desc->algo_deinit != NULL) {
         n->desc->algo_deinit(n); /* 必须早于 unload：它可能要读模型句柄释放张量绑定 */
@@ -243,6 +441,12 @@ static aura_err_t nn_stop(aura_node_t *self)
     if (n->model != NULL) {
         aura_infer_unload(n->model);
         n->model = NULL;
+    }
+    /* 组必须**最后**销毁：组内的 Runtime 没了，挂在它上面的模型就悬空了。
+     * 顺序反了在 PC 上大概率也能跑（内存还没被复用），正是那种到板端才炸的写法。 */
+    if (n->group != NULL) {
+        aura_infer_group_destroy(n->group);
+        n->group = NULL;
     }
     return AURA_OK;
 }
@@ -271,14 +475,41 @@ static aura_err_t nn_reset_state(aura_node_t *self)
 static aura_err_t nn_control(aura_node_t *self, aura_node_cmd_t cmd, const void *arg)
 {
     (void)arg;
+    aura_nn_node_t *n = (aura_nn_node_t *)self;
     switch (cmd) {
     case AURA_CMD_START:
     case AURA_CMD_STOP:
         return AURA_OK; /* 模型在 init/stop 时装卸，这里无额外动作 */
     case AURA_CMD_RESET:
     case AURA_CMD_FLUSH:
+        if (nn_is_async(n)) {
+            /* 复位哨兵走队列：algo_reset 在 worker 线程跑，与 process 线程无并发。
+             * 标志位清空仍在本线程（flag 字段只归模板，worker 不碰）。
+             * 哨兵必须是完整的 job_size 字节（见 nn_stop 的注释）。 */
+            n->flag_valid = false;
+            n->last_flag  = 0;
+            {
+                uint8_t zero[64];
+                memset(zero, 0, sizeof(zero));
+                /* job_size 通常 ≤ 64（ASR/声纹的小命令）；超了走堆。 */
+                if (n->desc->job_size <= sizeof(zero)) {
+                    (void)aura_osal_queue_push(n->job_q, zero, AURA_NO_WAIT);
+                } else {
+                    void *zb = calloc(1, n->desc->job_size);
+                    if (zb != NULL) {
+                        (void)aura_osal_queue_push(n->job_q, zb, AURA_NO_WAIT);
+                        free(zb);
+                    }
+                }
+            }
+            return AURA_OK;
+        }
         return nn_reset_state(self);
     default:
+        /* SET_CONFIG 等算法自定命令：模板只转发（在调用线程内联执行）。 */
+        if (n->desc->algo_control != NULL) {
+            return n->desc->algo_control(n, cmd, arg);
+        }
         return AURA_ERR_UNSUPPORTED;
     }
 }
@@ -300,7 +531,20 @@ static aura_err_t nn_process_audio(aura_node_t *self, const aura_audio_frame_t *
     bool       ready = (n->desc->frame_in != NULL) ? n->desc->frame_in(n, frame) : false;
     aura_err_t rc    = AURA_OK;
 
-    if (ready) {
+    if (ready && nn_is_async(n)) {
+        /* 异步：frame_in 已把 job 构造在 state 开头，这里按值拷进任务队列。
+         * 队满丢新任务并计数（任务带快照数据，丢一个只丢一段结果，不错位）。 */
+        n->infer_calls++;
+        if (aura_osal_queue_push(n->job_q, aura_nn_state(n), AURA_NO_WAIT) != AURA_OK) {
+            n->dropped++;
+            if (!n->err_logged) {
+                n->err_logged = true;
+                AURA_LOGW(TAG, "%s: job queue full, dropping jobs (nn_async)", self->name);
+            }
+        }
+    }
+
+    if (ready && !nn_is_async(n)) {
         /* 窗口数：与"是否真跑了前向"无关 —— 无模型算法（纯逻辑/自检节点）
          * 一样会攒窗，只是没得跑。按模型调用计数会让它们永远显示 0 窗。 */
         n->infer_calls++;
@@ -345,11 +589,30 @@ static aura_err_t nn_process_audio(aura_node_t *self, const aura_audio_frame_t *
     return rc;
 }
 
-/* 事件在 bus 分发任务里到达：只转发给算法，不做任何框架侧解释
- * （事件语义是算法的事，框架只负责把事件送到它面前）。 */
+/* 事件在 bus 分发任务里到达：NN_RESULT 是本节点 worker 投的"结果已就绪"信号
+ * （payload = 节点名），认领后 drain 结果队列交给 result_consume（本上下文
+ * 允许 emit_text/emit 事件）；其余事件转发给算法，不做框架侧解释。 */
 static void nn_on_event(aura_node_t *self, const aura_event_t *event)
 {
     aura_nn_node_t *n = (aura_nn_node_t *)self;
+
+    if (event->type == AURA_EVENT_NN_RESULT && nn_is_async(n)) {
+        if (strcmp(event->payload, self->name) != 0) {
+            /* 别的异步节点的结果信号：转发给算法（一般忽略），不认领 */
+            if (n->desc->on_event != NULL) {
+                n->desc->on_event(n, event);
+            }
+            return;
+        }
+        nn_result_item_t item;
+        while (aura_osal_queue_pop(n->result_q, &item, AURA_NO_WAIT) == AURA_OK) {
+            if (n->desc->result_consume != NULL) {
+                (void)n->desc->result_consume(n, item.data, item.len);
+            }
+        }
+        return;
+    }
+
     if (n->desc->on_event != NULL) {
         n->desc->on_event(n, event);
     }
@@ -410,9 +673,10 @@ static aura_node_t *nn_create_node(const aura_algo_params_t *params, aura_err_t 
     memset(&caps, 0, sizeof(caps));
     caps.consumes_audio = (d->io_kind != AURA_NN_IO_ASYNC_SOURCE);
     caps.produces_audio = (d->io_kind != AURA_NN_IO_OBSERVER);
-    caps.wants_events   = d->wants_events;
-    /* 文本产出（ASR）与 changes_frame_rate 属于 NN_ASYNC 那一批，
-     * finalize 现在会拒绝，故此处无需声明。 */
+    caps.wants_events   = d->wants_events || (d->kind == AURA_ALGO_KIND_NN_ASYNC);
+    /* NN_RESULT 是模板自己认领的内部事件 —— 异步节点必然要订阅总线，
+     * 不依赖算法写 wants_events。 */
+    caps.produces_text  = (d->kind == AURA_ALGO_KIND_NN_ASYNC) && d->produces_text;
     aura_node_init(&n->base, n->namebuf, &NN_OPS, &caps);
     return &n->base;
 }
@@ -424,15 +688,9 @@ aura_err_t aura_nn_finalize(aura_nn_desc_t *desc)
     if (desc == NULL || desc->name == NULL) {
         return AURA_ERR_INVALID_ARG;
     }
-    /* 未实现的形态在这里就拒绝，而不是让一个"看起来能用"的异步节点在
-     * 运行期静默丢结果 —— 接口留好与假装实现是两回事（见文件头注释）。 */
-    if (desc->kind == AURA_ALGO_KIND_NN_ASYNC) {
-        AURA_LOGE(TAG, "algo %s: NN_ASYNC not implemented yet (Phase 3/4)", desc->name);
-        return AURA_ERR_UNSUPPORTED;
-    }
-    if (desc->kind != AURA_ALGO_KIND_NN_SYNC) {
-        AURA_LOGE(TAG, "algo %s: nn adapter only takes NN_SYNC (got %s)", desc->name,
-                  aura_algo_kind_name(desc->kind));
+    if (desc->kind != AURA_ALGO_KIND_NN_SYNC && desc->kind != AURA_ALGO_KIND_NN_ASYNC) {
+        AURA_LOGE(TAG, "algo %s: nn adapter only takes NN_SYNC/NN_ASYNC (got %s)",
+                  desc->name, aura_algo_kind_name(desc->kind));
         return AURA_ERR_INVALID_ARG;
     }
     if (desc->io_kind == AURA_NN_IO_ASYNC_SOURCE) {
@@ -441,6 +699,28 @@ aura_err_t aura_nn_finalize(aura_nn_desc_t *desc)
     }
     if (desc->io_kind != AURA_NN_IO_OBSERVER && desc->io_kind != AURA_NN_IO_PASSTHROUGH) {
         AURA_LOGE(TAG, "algo %s: bad io_kind %d", desc->name, (int)desc->io_kind);
+        return AURA_ERR_INVALID_ARG;
+    }
+    if (desc->kind == AURA_ALGO_KIND_NN_ASYNC) {
+        /* 异步形态的硬性要件：缺一个就是"看起来能用、结果静默丢失"的节点。 */
+        if (desc->async_run == NULL || desc->result_consume == NULL) {
+            AURA_LOGE(TAG, "algo %s: NN_ASYNC requires async_run + result_consume",
+                      desc->name);
+            return AURA_ERR_INVALID_ARG;
+        }
+        if (desc->job_size < sizeof(aura_nn_job_head_t) ||
+            desc->job_size > desc->state_size) {
+            AURA_LOGE(TAG, "algo %s: job_size %u 必须 >= %u 且 <= state_size %u",
+                      desc->name, (unsigned)desc->job_size,
+                      (unsigned)sizeof(aura_nn_job_head_t), (unsigned)desc->state_size);
+            return AURA_ERR_INVALID_ARG;
+        }
+        if (desc->produces_text && desc->io_kind != AURA_NN_IO_PASSTHROUGH) {
+            AURA_LOGE(TAG, "algo %s: produces_text 只允许 PASSTHROUGH", desc->name);
+            return AURA_ERR_INVALID_ARG;
+        }
+    } else if (desc->produces_text) {
+        AURA_LOGE(TAG, "algo %s: produces_text 只允许 NN_ASYNC", desc->name);
         return AURA_ERR_INVALID_ARG;
     }
     if (desc->wants_events && desc->on_event == NULL) {

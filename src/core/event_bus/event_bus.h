@@ -42,12 +42,25 @@ typedef enum {
     AURA_EVENT_SILENCE_TIMEOUT,
     AURA_EVENT_ERROR,             /* code=aura_err_t，payload=描述 */
     AURA_EVENT_USER,              /* 上层自定义，code 由上层约定 */
+
+    /* 框架内部事件：NN 异步结果已就绪（ASR/声纹的子任务算完了）。
+     * payload = 节点实例名（**用它认领**：每个 NN 异步节点的适配层只处理
+     * 自己名字那条，其余直接忽略）；code 恒为 0，结果本身在节点的私有队列里，
+     * 事件只是"该来取了"的信号（见 algorithm/aura_nn_adapter.h 的异步契约）。
+     * 追加在 USER 之后是为了不移动既有枚举值 —— 事件掩码按位编码，
+     * 插在中间会让所有已编译的订阅掩码错位。 */
+    AURA_EVENT_NN_RESULT,
     AURA_EVENT_TYPE_COUNT
 } aura_event_type_t;
 
 #ifndef AURA_EVENT_PAYLOAD_BYTES
 #define AURA_EVENT_PAYLOAD_BYTES 256
 #endif
+
+/* u.audio.pts_us 取"发布者的当前输入帧"：由 aura_nn_emit/aura_nn_report 的代填
+ * 逻辑使用。调用方想自己指定 pts 时写真实值即可（0 也是合法值——流起点），
+ * 只有显式写 AURA_PTS_AUTO 才走代填。 */
+#define AURA_PTS_AUTO UINT64_MAX
 
 typedef struct aura_event {
     aura_event_type_t type;
@@ -60,7 +73,7 @@ typedef struct aura_event {
         struct { bool     passed; int32_t score; } voiceprint; /* score * 100 */
         struct { bool     is_final; uint32_t len; } asr;
         struct { uint32_t tokens; } llm;
-        struct { uint64_t pts_us; } audio;
+        struct { uint64_t pts_us; } audio;           /* 对应的音频时间轴位置 */
         struct { int32_t  from; int32_t to; } state;
     } u;
     char payload[AURA_EVENT_PAYLOAD_BYTES]; /* 短文本（ASR 结果 / token 片段 / 描述） */

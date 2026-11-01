@@ -8,6 +8,7 @@
 #include "aura_test.h"
 
 #include "algorithm/aura_nn_adapter.h"
+#include "aura_event_log.h"
 #include "core/algorithm.h"
 #include "core/pipeline/pipeline.h"
 
@@ -52,6 +53,61 @@ static bool fake_frame_in(aura_nn_node_t *self, const aura_audio_frame_t *frame)
     s->frame_in_calls++;
     return aura_nn_window_push(&s->win, (const int16_t *)frame->data, frame->frame_count) != NULL;
 }
+
+/* ---- ASYNC 假算法：frame_in 每帧构造一个 job（seq 递增）→ worker 原样投回
+ * → result_consume 发 USER 事件（code = seq）。验证任务队列/worker/结果回流的
+ * 整条链路。注意 job 必须在 state **开头**（模板按 state 头 job_size 字节拷贝）。 */
+typedef struct {
+    aura_nn_job_head_t head;
+    int32_t            seq;
+} fake_async_job_t;
+
+typedef struct {
+    fake_async_job_t job; /* 必须第一成员 */
+    int32_t          next_seq;
+    volatile int32_t consumed;
+} fake_async_state_t;
+
+static bool fake_async_frame_in(aura_nn_node_t *self, const aura_audio_frame_t *frame)
+{
+    (void)frame;
+    fake_async_state_t *s = aura_nn_state(self);
+    s->job.head.magic = AURA_NN_JOB_MAGIC;
+    s->job.head.kind  = 0;
+    s->job.seq        = s->next_seq++;
+    return true; /* 每帧一个任务 */
+}
+
+static aura_err_t fake_async_run(aura_nn_node_t *self, const void *job)
+{
+    const fake_async_job_t *j = (const fake_async_job_t *)job;
+    int32_t seq = j->seq;
+    aura_nn_post_result(self, &seq, sizeof(seq));
+    return AURA_OK;
+}
+
+static aura_err_t fake_result_consume(aura_nn_node_t *self, const void *result, uint32_t len)
+{
+    fake_async_state_t *s = aura_nn_state(self);
+    s->consumed++;
+    aura_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = AURA_EVENT_USER;
+    ev.code = (len >= sizeof(int32_t)) ? *(const int32_t *)result : -1;
+    aura_nn_emit(self, AURA_EVENT_USER, &ev);
+    return AURA_OK;
+}
+
+static aura_nn_desc_t g_fake_async_desc = {
+    .name            = "nn_async_fake",
+    .kind            = AURA_ALGO_KIND_NN_ASYNC,
+    .io_kind         = AURA_NN_IO_OBSERVER,
+    .state_size      = sizeof(fake_async_state_t),
+    .job_size        = sizeof(fake_async_job_t),
+    .frame_in        = fake_async_frame_in,
+    .async_run       = fake_async_run,
+    .result_consume  = fake_result_consume,
+};
 
 static aura_err_t fake_algo_reset(aura_nn_node_t *self)
 {
@@ -417,13 +473,17 @@ AURA_TEST(test_flag_edges_and_flush)
         (1u << AURA_EVENT_VAD_SPEECH_START) | (1u << AURA_EVENT_VAD_SPEECH_END);
 
     fake_nn_state_t *s = state_of(nodes[0]);
-    aura_event_t     ev;
+
+    /* 先订阅再喂数据（见 aura_event_log.h：反过来会和节点任务抢时序）。 */
+    aura_event_log_t log;
+    AURA_ASSERT_EQ(aura_event_log_init(&log, bus, mask), AURA_OK);
 
     /* 连续 3 帧命中：只发 1 次上升沿（每帧发事件会刷爆总线） */
     s->hit = 1;
     feed_pts(q, 3, 0);
-    AURA_ASSERT_EQ(aura_event_bus_wait(bus, mask, &ev, 2000), AURA_OK);
-    AURA_ASSERT_EQ(ev.type, AURA_EVENT_VAD_SPEECH_START);
+    AURA_ASSERT_EQ(aura_event_log_wait(&log, 1, 2000), AURA_OK);
+    AURA_ASSERT_EQ(log.count, 1);
+    AURA_ASSERT_EQ(log.ev[0].type, AURA_EVENT_VAD_SPEECH_START);
 
     aura_nn_stats_t st;
     AURA_ASSERT_EQ(aura_nn_get_stats(nodes[0], &st), AURA_OK);
@@ -435,8 +495,9 @@ AURA_TEST(test_flag_edges_and_flush)
     /* 转静音 → 下降沿 */
     s->hit = 0;
     feed_pts(q, 2, 0);
-    AURA_ASSERT_EQ(aura_event_bus_wait(bus, mask, &ev, 2000), AURA_OK);
-    AURA_ASSERT_EQ(ev.type, AURA_EVENT_VAD_SPEECH_END);
+    AURA_ASSERT_EQ(aura_event_log_wait(&log, 2, 2000), AURA_OK);
+    AURA_ASSERT_EQ(log.count, 2);
+    AURA_ASSERT_EQ(log.ev[1].type, AURA_EVENT_VAD_SPEECH_END);
     AURA_ASSERT_EQ(aura_nn_get_stats(nodes[0], &st), AURA_OK);
     AURA_ASSERT_EQ(st.flag_rise, 1);
     AURA_ASSERT_EQ(st.flag_fall, 1);
@@ -450,8 +511,8 @@ AURA_TEST(test_flag_edges_and_flush)
 
     s->hit = 1;
     feed_pts(q, 1, 0);
-    AURA_ASSERT_EQ(aura_event_bus_wait(bus, mask, &ev, 2000), AURA_OK);
-    AURA_ASSERT_EQ(ev.type, AURA_EVENT_VAD_SPEECH_START);
+    AURA_ASSERT_EQ(aura_event_log_wait(&log, 3, 2000), AURA_OK);
+    AURA_ASSERT_EQ(log.ev[2].type, AURA_EVENT_VAD_SPEECH_START);
     AURA_ASSERT_EQ(aura_nn_get_stats(nodes[0], &st), AURA_OK);
     AURA_ASSERT_EQ(st.flag_rise, 2);
 
@@ -459,6 +520,7 @@ AURA_TEST(test_flag_edges_and_flush)
     AURA_ASSERT_EQ(aura_pipeline_wait_drained(q, 2000), AURA_OK);
     AURA_ASSERT_EQ(g_trace.count, 6);
 
+    aura_event_log_fini(&log);
     teardown(q, nodes, n);
 }
 
@@ -486,24 +548,65 @@ AURA_TEST(test_bare_passthrough)
 /* 未实现的形态在这里被拒绝，而不是等运行期静默丢结果 */
 AURA_TEST(test_finalize_rejects)
 {
-    static aura_nn_desc_t d;
+    /* 注册表存的是**指针**：成功注册的 desc 必须有独立且常驻的存储，
+     * 用一个共用的 static 反复 memset 会让两个注册项指向同一块内存，
+     * 第二次注册时 find 匹配到第一项（名字已被覆盖）→ 误报 EXIST。 */
+    static aura_nn_desc_t d;         /* 失败块共用（不会注册，随意擦） */
+    static aura_nn_desc_t d_ok;      /* nn_ok —— 注册过的必须独立 */
+    static aura_nn_desc_t d_async_ok;
 
-    memset(&d, 0, sizeof(d));
-    d.name    = "nn_ok";
-    d.kind    = AURA_ALGO_KIND_NN_SYNC;
-    d.io_kind = AURA_NN_IO_OBSERVER;
-    AURA_ASSERT_EQ(aura_nn_finalize(&d), AURA_OK);
-    AURA_ASSERT_STREQ(d.algo.name, "nn_ok");
-    AURA_ASSERT_EQ(d.algo.kind, AURA_ALGO_KIND_NN_SYNC);
-    AURA_ASSERT(d.algo.io.consumes_audio);
-    AURA_ASSERT(!d.algo.io.produces_audio); /* OBSERVER 不产出 */
-    AURA_ASSERT(d.algo.create != NULL);
+    memset(&d_ok, 0, sizeof(d_ok));
+    d_ok.name    = "nn_ok";
+    d_ok.kind    = AURA_ALGO_KIND_NN_SYNC;
+    d_ok.io_kind = AURA_NN_IO_OBSERVER;
+    AURA_ASSERT_EQ(aura_nn_finalize(&d_ok), AURA_OK);
+    AURA_ASSERT_STREQ(d_ok.algo.name, "nn_ok");
+    AURA_ASSERT_EQ(d_ok.algo.kind, AURA_ALGO_KIND_NN_SYNC);
+    AURA_ASSERT(d_ok.algo.io.consumes_audio);
+    AURA_ASSERT(!d_ok.algo.io.produces_audio); /* OBSERVER 不产出 */
+    AURA_ASSERT(d_ok.algo.create != NULL);
 
+    /* NN_ASYNC 已实现（Phase 3）：缺 async_run/result_consume/job_size 是
+     * 装配期错误，不再是 UNSUPPORTED。 */
     memset(&d, 0, sizeof(d));
-    d.name    = "nn_async";
+    d.name    = "nn_async_bare";
     d.kind    = AURA_ALGO_KIND_NN_ASYNC;
     d.io_kind = AURA_NN_IO_OBSERVER;
-    AURA_ASSERT_EQ(aura_nn_finalize(&d), AURA_ERR_UNSUPPORTED);
+    AURA_ASSERT_EQ(aura_nn_finalize(&d), AURA_ERR_INVALID_ARG);
+
+    memset(&d, 0, sizeof(d));
+    d.name    = "nn_async_norun";
+    d.kind    = AURA_ALGO_KIND_NN_ASYNC;
+    d.io_kind = AURA_NN_IO_OBSERVER;
+    d.result_consume = fake_result_consume;
+    d.job_size = 16;
+    AURA_ASSERT_EQ(aura_nn_finalize(&d), AURA_ERR_INVALID_ARG);
+
+    memset(&d, 0, sizeof(d));
+    d.name    = "nn_async_badjob";
+    d.kind    = AURA_ALGO_KIND_NN_ASYNC;
+    d.io_kind = AURA_NN_IO_OBSERVER;
+    d.async_run = fake_async_run;
+    d.result_consume = fake_result_consume;
+    d.job_size = 2; /* 小于 job 头 */
+    AURA_ASSERT_EQ(aura_nn_finalize(&d), AURA_ERR_INVALID_ARG);
+
+    memset(&d_async_ok, 0, sizeof(d_async_ok));
+    d_async_ok.name    = "nn_async_ok";
+    d_async_ok.kind    = AURA_ALGO_KIND_NN_ASYNC;
+    d_async_ok.io_kind = AURA_NN_IO_OBSERVER;
+    d_async_ok.async_run = fake_async_run;
+    d_async_ok.result_consume = fake_result_consume;
+    d_async_ok.job_size = 16;
+    d_async_ok.state_size = 32;
+    AURA_ASSERT_EQ(aura_nn_finalize(&d_async_ok), AURA_OK);
+
+    memset(&d, 0, sizeof(d));
+    d.name    = "nn_sync_text";
+    d.kind    = AURA_ALGO_KIND_NN_SYNC;
+    d.io_kind = AURA_NN_IO_OBSERVER;
+    d.produces_text = true; /* 文本产出只允许 ASYNC */
+    AURA_ASSERT_EQ(aura_nn_finalize(&d), AURA_ERR_INVALID_ARG);
 
     memset(&d, 0, sizeof(d));
     d.name    = "nn_tts";
@@ -547,15 +650,62 @@ AURA_TEST(test_event_dispatch)
 
     aura_event_bus_t *bus = aura_pipeline_bus(p);
     AURA_ASSERT(bus != NULL);
+
+    /* 先订阅（等下要断言 VAD_START 确实发出去了 —— 节点自己报的），再发无关事件。 */
+    aura_event_log_t log;
+    AURA_ASSERT_EQ(aura_event_log_init(&log, bus, 1u << AURA_EVENT_VAD_SPEECH_START), AURA_OK);
+
     /* 别的节点发的无关事件不该触发回调 */
     AURA_ASSERT_EQ(aura_event_bus_post(bus, AURA_EVENT_LLM_DONE, 0, "x"), AURA_OK);
     AURA_ASSERT_EQ(aura_event_bus_post(bus, AURA_EVENT_BARGE_IN, 0, "test"), AURA_OK);
 
-    aura_event_t ev;
-    AURA_ASSERT_EQ(aura_event_bus_wait(bus, 1u << AURA_EVENT_VAD_SPEECH_START, &ev, 2000),
-                   AURA_OK);
+    /* BARGE_IN 被 fake_nn_event 的 on_event 收到 → events_seen++ 并 report(true)；
+     * 后者在适配层变成上升沿事件 —— 等它到齐就等于"回调确实跑过了"，
+     * 比 sleep 一个固定时长可靠（见 aura_event_log.h）。 */
+    AURA_ASSERT_EQ(aura_event_log_wait(&log, 1, 2000), AURA_OK);
     AURA_ASSERT_EQ(st->events_seen, 1);
 
+    aura_event_log_fini(&log);
+    teardown(p, nodes, n);
+}
+
+/* ============================== ASYNC 全链路 ============================== */
+
+AURA_TEST(test_async_flow)
+{
+    setup();
+    AURA_ASSERT_EQ(aura_nn_register_all(&g_fake_async_desc, 1), AURA_OK);
+
+    aura_chain_t  c;
+    aura_node_t  *nodes[4];
+    uint32_t      n = 0;
+    /* 观察者挂旁路：链首需要一个产音频的节点喂它（与其它用例同构） */
+    aura_pipeline_t *p = build_and_start("fake_nn_pass, nn_async_fake", &c, nodes, &n);
+    AURA_ASSERT(p != NULL);
+
+    /* 先订阅再喂：等 3 条 USER 事件（每条 = 一个 job 走完
+     * process→任务队列→worker→结果队列→NN_RESULT→result_consume 全程）。 */
+    aura_event_log_t log;
+    AURA_ASSERT_EQ(aura_event_log_init(&log, aura_pipeline_bus(p),
+                                       1u << AURA_EVENT_USER),
+                   AURA_OK);
+    feed_pts(p, 3, 0);
+
+    AURA_ASSERT_EQ(aura_event_log_wait(&log, 3, 5000), AURA_OK);
+    /* seq 0/1/2 按投递顺序到达（job 是快照、队列 FIFO、单 worker） */
+    const aura_event_t *e0 = aura_event_log_find(&log, AURA_EVENT_USER, 0);
+    const aura_event_t *e1 = aura_event_log_find(&log, AURA_EVENT_USER, 1);
+    const aura_event_t *e2 = aura_event_log_find(&log, AURA_EVENT_USER, 2);
+    AURA_ASSERT(e0 != NULL && e1 != NULL && e2 != NULL);
+    AURA_ASSERT_EQ(e0->code, 0);
+    AURA_ASSERT_EQ(e1->code, 1);
+    AURA_ASSERT_EQ(e2->code, 2);
+
+    /* 复位哨兵：走队列、在 worker 里跑 —— 至少不该把任务线程卡死 */
+    AURA_ASSERT_EQ(aura_pipeline_control(p, AURA_CMD_RESET), AURA_OK);
+    aura_test_sleep_ms(50);
+
+    aura_event_log_fini(&log);
     teardown(p, nodes, n);
 }
 

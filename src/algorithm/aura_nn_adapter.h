@@ -26,11 +26,18 @@
  *             适配层统计单次前向耗时，超预算（> frame_ms）只告警不丢帧 ——
  *             丢帧会让"算法太慢"变成"音频断断续续"，更难查。
  *
- *   NN_ASYNC  单次前向远超一帧（ASR/LLM/TTS）。契约（Phase 3/4 实现）：
+ *   NN_ASYNC  单次前向远超一帧（ASR/LLM/TTS）。已实现（Phase 3 起）：
  *             process 只入队，子任务做推理，结果经**私有队列 + 内部事件**回到
  *             节点的 on_event 上下文再产出 —— 因为 emit_audio/emit_text 依赖
  *             节点 task 的 process 上下文（pts 字段非线程安全，见 node.h）。
- *             子任务线程里**不得**调用任何 emit_*。
+ *             子任务线程里**不得**调用任何 emit_*，只能 aura_nn_post_result()。
+ *
+ *             任务流：frame_in 攒够一窗 → 模板把**算法状态开头 job_size 字节**
+ *             （算法在 frame_in 里构造好的 job，含按值拷贝的数据）拷进任务队列
+ *             → worker 线程弹 job：magic==0 = 复位哨兵（跑 algo_reset，与
+ *             process 线程无并发），否则 async_run() → 结果走
+ *             aura_nn_post_result()（私有结果队列 + NN_RESULT 事件）→ 模板在
+ *             bus 分发任务里认领（payload = 节点名）→ result_consume()。
  *
  * ---------------------------------------------------------------------------
  * 分层：本层在 inference 之上（依赖 inference.h），与 dsp 适配层同层。
@@ -124,11 +131,17 @@ struct aura_nn_node {
     const struct aura_nn_desc *desc;
     aura_algo_params_t        params; /* 装配期快照（栈上的 params 早已失效） */
     aura_infer_model_t       *model;  /* 可为 NULL（无模型算法） */
+    aura_infer_group_t       *group;  /* 私有推理组；NULL = 用默认组 */
     char                      namebuf[AURA_CHAIN_NAME_MAX];
 
     uint32_t rate;     /* 生效采样率 */
     uint32_t channels;
     uint32_t frame_len;
+
+    /* NN_ASYNC 运行时（SYNC 节点不用） */
+    aura_task_t  *worker;   /* 子任务线程 */
+    aura_queue_t *job_q;    /* 任务队列（item = job_size 字节的 job） */
+    aura_queue_t *result_q; /* 结果队列（item = {len, data}，见 aura_nn_post_result） */
 
     int  last_flag; /* 标志输出的边沿检测（见 desc.flag_*_type） */
     bool flag_valid;
@@ -173,6 +186,13 @@ typedef struct aura_nn_desc {
      * 置真要同时给 on_event —— 订阅了却没人处理，是描述表写错（finalize 报错）。 */
     bool wants_events;
 
+    /* 用私有推理组（见 inference.h「推理组」）。
+     * 置位的场合：单次前向明显超过一帧预算的模型（zipformer KWS 20–50ms > 10ms）。
+     * 不置位的话它和别的 SYNC 节点共用默认组，组锁会把 VAD 的短前向挡在它后面，
+     * 表现为"VAD 判定偶尔晚几十毫秒"——不报错，只是所有时间指标一起漂。
+     * 代价是多一份 Runtime 与线程池；对每 160ms 才跑一次的模型不值一提。 */
+    bool private_group;
+
     /* 私有状态大小（字节），创建时清零并跟在节点结构体后面。 */
     size_t state_size;
 
@@ -191,8 +211,14 @@ typedef struct aura_nn_desc {
     aura_err_t (*infer_out)(aura_nn_node_t *self);
 
     /* 控制面：RESET/FLUSH —— 清滑窗、清递推状态（LSTM hc）、清判定状态。
-     * 模型与会话状态**不**重载（重载是 stop/start 的事）。 */
+     * 模型与会话状态**不**重载（重载是 stop/start 的事）。
+     * NN_ASYNC 的 RESET/FLUSH 走队列在 worker 里跑（见 nn_control）。 */
     aura_err_t (*algo_reset)(aura_nn_node_t *self);
+
+    /* 其余命令（SET_CONFIG 等，语义由算法自定）：模板只转发，不理解内容。
+     * 在调用线程内联执行 —— 实现里只做"就地换算 + 投 job"这类短动作。 */
+    aura_err_t (*algo_control)(aura_nn_node_t *self, aura_node_cmd_t cmd,
+                               const void *arg);
 
     /* 事件回调（仅 wants_events = true 时有意义）：barge-in、别的节点发的 VAD
      * 边沿、控制类事件。典型用途是"播放期间抬高判定阈值"这类策略。
@@ -201,6 +227,26 @@ typedef struct aura_nn_desc {
 
     /* 停止时调用（模型卸载之前）：释放算法自有的额外资源。 */
     void (*algo_deinit)(aura_nn_node_t *self);
+
+    /* ---- NN_ASYNC 专属（SYNC 节点忽略）---- */
+
+    /* 产出文本 chunk（ASR）。仅 NN_ASYNC 允许（SYNC 的文本面没有旁路观察场景）。 */
+    bool produces_text;
+
+    /* 任务队列深度（默认 8）。队满丢新任务并计数（dropped）——
+     * 任务带的是快照数据，丢一个只会丢一段识别结果，不会错位。 */
+    uint32_t job_queue_depth;
+
+    /* job 结构体大小。job 必须放在算法状态（state）的**开头**，frame_in 返回
+     * true 时模板把前 job_size 字节拷进任务队列（按值穿队列，无竞态）。
+     * job 的前 4 字节必须是 aura_nn_job_head_t（magic 用于识别哨兵）。 */
+    size_t job_size;
+
+    /* worker 线程里跑：读 job、做推理。不得调用任何 emit_*。 */
+    aura_err_t (*async_run)(aura_nn_node_t *self, const void *job);
+
+    /* 结果消费：在 bus 分发任务上下文里跑（可以 emit_text/emit 事件）。 */
+    aura_err_t (*result_consume)(aura_nn_node_t *self, const void *result, uint32_t len);
 
     /* ---- 标志输出的边沿事件（VAD 类）----
      * aura_nn_report() 报告的 0→1 发 rise_type、1→0 发 fall_type；
@@ -213,9 +259,26 @@ typedef struct aura_nn_desc {
     uint32_t                      param_spec_count;
 } aura_nn_desc_t;
 
+/* job 头：job 结构体的前 8 字节必须是它（模板识别哨兵用）。
+ * magic == AURA_NN_JOB_MAGIC = 真任务（其余字节算法自定）；
+ * magic == 0 = 复位哨兵（worker 里跑 algo_reset）；magic == AURA_NN_JOB_EXIT
+ * = 退出哨兵（模板内部用，算法不要碰）。 */
+typedef struct aura_nn_job_head {
+    uint32_t magic;
+    uint32_t kind; /* 算法自定义任务类别 */
+} aura_nn_job_head_t;
+
+#define AURA_NN_JOB_MAGIC 0x4E4E4A42u /* "NNJB" */
+#define AURA_NN_JOB_EXIT  0x58495421u /* "!TIX" */
+
+/* worker 线程里投递结果：进私有结果队列 + 发 AURA_EVENT_NN_RESULT
+ * （payload = 节点名，模板在 bus 分发任务里认领后调 result_consume）。
+ * len 上限 AURA_NN_RESULT_MAX_DATA。只可在 worker 上下文调用。 */
+void aura_nn_post_result(aura_nn_node_t *self, const void *result, uint32_t len);
+
 /* 依 name/io_kind 填好内嵌的 algo 描述（io 能力、create）。
  * 描述表在 static 里无法调用函数，故每条注册前必须调一次。
- * 未实现的形态（NN_ASYNC / ASYNC_SOURCE）在此返回 AURA_ERR_UNSUPPORTED。 */
+ * ASYNC_SOURCE（TTS 音频源）仍未实现，在此返回 AURA_ERR_UNSUPPORTED。 */
 aura_err_t aura_nn_finalize(aura_nn_desc_t *desc);
 
 /* 批量 finalize + 注册。 */
@@ -228,8 +291,15 @@ const char *aura_nn_model_root(void);
 
 /* ============================== 回调内使用 ============================== */
 
-/* 报告本窗判定结果（0/1）。适配层做边沿检测并发事件（见 desc.flag_*_type）。 */
+/* 报告本窗判定结果（0/1）。适配层做边沿检测并发事件（见 desc.flag_*_type），
+ * 事件带当前输入帧的 pts（下游按时间切片靠它，见 aura_nn_emit）。 */
 void aura_nn_report(aura_nn_node_t *self, bool hit);
+
+/* 发一个带值的事件（KWS 命中、声纹结果、ASR 分段…）。**不做边沿检测** ——
+ * 一次性结果每次都发。只填 type/code/u/payload，seq/ts_us 由总线补。
+ * ev->u.audio.pts_us 写 AURA_PTS_AUTO 表示"代填为当前输入帧的 pts"，
+ * 写真实值则原样使用（**只有 SYNC 路径能代填**：异步结果回调里没有"当前帧"）。 */
+void aura_nn_emit(aura_nn_node_t *self, int type, const aura_event_t *ev);
 
 /* 当前标志状态（不回看历史）。 */
 bool aura_nn_flag(const aura_nn_node_t *self);
