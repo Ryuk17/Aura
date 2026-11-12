@@ -3,7 +3,7 @@
  * 职责：节点注册与连线、每节点一条任务、帧池管理、pts 维护、错误上抛、统计。
  *
  * 拓扑：**树形受限 DAG** —— 一条线性主链 + 扇出旁路观察（tee）+ AEC 参考第二输入。
- * 不是一个通用的有向图，理由见 docs/algorithm_unified_api.md：
+ * 不是一个通用的有向图，理由见 docs/soundproof_integration.md：
  *
  *   - 控制/结果面本来就是广播（event_bus），不需要图来承载多消费者；
  *   - 音频面唯一的多消费者场景是"旁路观察"（VAD/KWS/audio_debug 同时看同一路

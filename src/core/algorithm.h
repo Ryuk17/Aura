@@ -1,7 +1,7 @@
 /* Aura — 统一算法接口：提供者契约 + 注册表 + 链组装
  *
- * 目的（todo.md 第 3 节"算法统一接口"，Phase 2 前置）：
- * 让 TrickRoom 的 3A/BSS、MNN 的 KWS/ASR/LLM/TTS、以及将来任何新算法，都通过
+ * 目的：
+ * 让 soundproof 的 3A/BSS、KWS/ASR/LLM/TTS、以及将来任何新算法，都通过
  * **同一套接口**接入 pipeline，从而使链可以自由组合、按名字装配、按配置裁剪。
  *
  * 三层结构（本文档定义前两层，第三层在各适配器里）：
@@ -13,21 +13,21 @@
  *   ② 注册表 —— 名字 → 描述表。装配时按名字取算法，不出现函数符号硬编码，
  *      于是"换一个 KWS"是从配置文件改一个词，而不是改一行 include。
  *
- *   ③ 适配器（dsp/aura_dsp_adapter、algorithm/aura_nn_adapter）—— 把具体引擎
- *      的 API 形状（TrickRoom 的句柄族 / MNN 的会话）翻译成契约。
+ *   ③ 适配器（src/soundproof/）—— 把 soundproof 的 C ABI（AudioEngine_*）
+ *      翻译成契约。算法实现、模型、MNN 都在 soundproof 仓库里。
  *
  * ---------------------------------------------------------------------------
  * 三种算法类型（aura_algo_kind_t）的区别只在**适配器怎么写**，不在契约：
  *
- *   DSP       同步、逐帧、无模型。TrickRoom 一族。
+ *   DSP       同步、逐帧、无模型。AEC/NS/AGC/BF/SRC 等。
  *   NN_SYNC   有模型，单次推理耗时 ≲ 一帧时长，可在 process 内同步跑（KWS/声纹/VAD）。
  *   NN_ASYNC  单次推理远超一帧时长，必须抛子任务（ASR/LLM/TTS）。
  *             子任务**不得** emit_audio/emit_text（那些接口绑定节点 task 上下文），
- *             结果经私有队列 + 内部事件回到 on_event 再产出。见 aura_nn_adapter.h。
+ *             结果经私有队列 + 内部事件回到 on_event 再产出（见 src/soundproof/ae_asr_node.c）。
  *
  * ---------------------------------------------------------------------------
  * 分层注意：本文件属于 core，**只能依赖 core 及以下**。
- * 因此这里不做任何全局注册动作（register_all 会反向依赖 dsp/算法模块）。
+ * 因此这里不做任何全局注册动作（register_all 会反向依赖 soundproof 适配层）。
  * 装配层（agent_core / host_sim / 测试）负责按裁剪开关调用各族的 register_all，
  * 再调 aura_chain_build。core 提供空注册表与 reset。
  */
@@ -49,7 +49,7 @@ extern "C" {
 
 /* 算法类型标签：仅用于装配层的分类决策与日志，不影响契约本身。 */
 typedef enum {
-    AURA_ALGO_KIND_DSP = 0, /* 传统信号处理（TrickRoom 一族） */
+    AURA_ALGO_KIND_DSP = 0, /* 传统信号处理（AEC/NS/AGC/BF/SRC 等） */
     AURA_ALGO_KIND_NN_SYNC, /* 神经网络，单帧内同步推理 */
     AURA_ALGO_KIND_NN_ASYNC /* 神经网络，子任务异步推理 */
 } aura_algo_kind_t;
@@ -85,7 +85,7 @@ struct aura_algo_desc; /* 见下文提供者契约 */
  * 链中间的重采样节点会改变它们，chain_build 负责逐级算好再交给工厂。 */
 typedef struct aura_algo_params {
     uint32_t sample_rate; /* 生效采样率 */
-    uint32_t frame_ms;    /* 帧长（毫秒）。TrickRoom 硬约束 frame_ms*100 == sample_rate */
+    uint32_t frame_ms;    /* 帧长（毫秒）。soundproof DSP 硬约束 frame_ms*100 == sample_rate */
     uint32_t in_channels; /* 生效输入通道数（主音频流；不含 AEC 参考） */
     const char *model_path; /* 模型文件路径，可为 NULL（DSP 类不需要） */
 

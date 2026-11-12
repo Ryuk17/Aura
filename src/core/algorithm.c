@@ -461,7 +461,7 @@ aura_err_t aura_chain_build(aura_pipeline_t *p, const aura_chain_t *chain, aura_
         params.instance_name      = link->name;
         params.provider           = desc; /* 适配器一族共用一个工厂，靠它取回描述表 */
         if (desc->kind == AURA_ALGO_KIND_DSP && shape_ms != 10) {
-            /* TrickRoom 全族硬约束：帧长固定 rate/100（10ms），不支持其它帧长。
+            /* soundproof DSP 族硬约束：帧长固定 rate/100（10ms），不支持其它帧长。
              * 不在这里拦，就会退化成运行期"每帧样本数对不上"的静默错误。 */
             AURA_LOGE(TAG, "chain[%u] %s: dsp needs frame_ms==10, got %u", i, link->algo,
                       shape_ms);
@@ -514,9 +514,13 @@ aura_err_t aura_chain_build(aura_pipeline_t *p, const aura_chain_t *chain, aura_
         }
         local[built++] = node;
 
-        /* 接线：主线顺序连接；纯消费者（观察者/终点）挂到最近的主链生产者上作为扇出。 */
+        /* 接线：主线顺序连接；纯消费者（观察者/终点）挂到最近的主链生产者上作为扇出。
+         *
+         * produces_audio 且 **consumes_audio=false** 的节点是“音频源”（TTS/播放
+         * 生成器）：它不接上游音频，但下游 sink 要接它。旧逻辑会把它挂到最近的
+         * 主链生产者上，等于让 TTS 吃麦克风数据 —— 这里显式区分。 */
         if (desc->io.produces_audio) {
-            if (prev_audio != NULL) {
+            if (prev_audio != NULL && desc->io.consumes_audio) {
                 rc = aura_pipeline_link(p, prev_audio, node);
                 if (rc != AURA_OK) {
                     goto fail;

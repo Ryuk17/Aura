@@ -29,11 +29,8 @@
 
 #include "agent/agent_core.h"
 #include "agent_export.h"
-#include "algorithm/aura_nn_adapter.h"
-#include "audio/vad/aura_silero.h"
 #include "core/node.h"
 #include "core/state_machine/state_machine.h"
-#include "inference/inference.h"
 #include "utils/logger/logger.h"
 #include "utils/profiler/profiler.h"
 #include "wav_io.h"
@@ -48,7 +45,6 @@
 
 typedef struct {
     bool voiceprint_fail;   /* --voiceprint-fail：第一次唤醒声纹拒绝 */
-    bool use_silero;        /* --use-silero：真实 silero VAD 代替能量 VAD */
     int64_t inject_error_at_ms; /* <0 = 不注入 */
     const char *wav_in;
     const char *wav_out;
@@ -58,16 +54,12 @@ typedef struct {
 
 static sim_opts_t g_opts;
 
-/* VAD 有两种实现：默认的能量 mock（本文件手写），--use-silero 时换成经
- * aura_nn_adapter 接入的真实模型。judge/turn_taking 只读"是否有人在说"，
- * 两种实现经 vad_active() 给出同一语义。 */
+/* 本仿真只用能量 VAD mock 验证骨架；真实 soundproof VAD 的适配层由
+ * tests/soundproof_chain/test_ae_vad.c 单独覆盖。 */
 typedef struct vad_node_impl vad_node_impl_t;
 
-static vad_node_impl_t *g_vad_energy; /* 能量 VAD（未用 silero 时非空） */
-static aura_nn_node_t  *g_vad_nn;     /* silero VAD（--use-silero 时非空） */
-static aura_nn_stats_t  g_vad_stats;  /* 上者 deinit 前的统计快照 */
+static vad_node_impl_t *g_vad_energy;
 
-/* 当前 VAD 判定（判定与 silero 的 prob 同语义）。定义在结构体之后。 */
 static bool vad_active(void);
 
 /* 状态轨迹记录（断言用） */
@@ -76,8 +68,6 @@ static aura_agent_state_t g_state_log[MAX_STATE_LOG];
 static uint32_t           g_state_log_count = 0;
 
 /* ============================================================== VAD 节点 */
-
-/* silero 的窗口口径见 src/audio/vad/aura_silero.c（已搬走）。 */
 
 /* 能量 VAD（mock）：RMS 阈值 + 滞回。播放期间抬高阈值（todo.md 4.5）。 */
 struct vad_node_impl {
@@ -93,13 +83,8 @@ struct vad_node_impl {
     uint32_t low_run;
 };
 
-/* 当前 VAD 判定。silero 侧直接读适配器 report 出去的状态位（= 它的判定结果），
- * 于是两条实现路径（能量 mock / 真实模型）在调用方看来是同一个语义。 */
 static bool vad_active(void)
 {
-    if (g_vad_nn != NULL) {
-        return aura_nn_flag(g_vad_nn);
-    }
     return (g_vad_energy != NULL) && g_vad_energy->active;
 }
 
@@ -964,8 +949,7 @@ static void usage(const char *argv0)
     printf("usage: %s [options]\n", argv0);
     printf("  --wav <path>         输入 WAV（默认生成合成音频 7s）\n");
     printf("  --out <path>         播放落盘 WAV（默认 host_sim_out.wav）\n");
-    printf("  --use-silero         用真实 silero VAD 代替能量 VAD\n");
-    printf("  --config <path>      .conf 覆盖配置（可含算法链，见 configs/silero.conf）\n");
+    printf("  --config <path>      .conf 覆盖配置（可含算法链）\n");
     printf("  --voiceprint-fail    第一次唤醒声纹拒绝（验证退回 Idle）\n");
     printf("  --inject-error <ms>  在该时刻让 ASR 注入错误（验证 Error/自动复位）\n");
     printf("  --log <level>        error|warn|info|debug|trace\n");
@@ -1033,8 +1017,6 @@ int main(int argc, char **argv)
             g_opts.wav_in = argv[++i];
         } else if (strcmp(argv[i], "--out") == 0 && i + 1 < argc) {
             g_opts.wav_out = argv[++i];
-        } else if (strcmp(argv[i], "--use-silero") == 0) {
-            g_opts.use_silero = true;
         } else if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
             g_opts.config = argv[++i];
         } else if (strcmp(argv[i], "--voiceprint-fail") == 0) {
@@ -1084,8 +1066,7 @@ int main(int argc, char **argv)
     aura_agent_config_t cfg;
     aura_agent_config_default(&cfg);
     if (g_opts.config != NULL) {
-        /* .conf 里的字符串由静态缓冲承接（aura_agent_config_load 的约定），
-         * 所以必须在 --use-silero 覆盖 chain 之前调用。 */
+        /* .conf 里的字符串由静态缓冲承接（aura_agent_config_load 的约定）。 */
         aura_err_t lrc = aura_agent_config_load(&cfg, g_opts.config);
         if (lrc != AURA_OK) {
             printf("FAIL: config %s: %s\n", g_opts.config, aura_strerror(lrc));
@@ -1099,37 +1080,7 @@ int main(int argc, char **argv)
         cfg.log_level = g_opts.log_level; /* --log 优先于 .conf */
     }
 
-    /* --use-silero：真实 VAD 不再手写节点，改为"注册进算法表 + 写进配置链"，
-     * 由 agent 按链装配 —— silero 描述表已搬进 src/audio/vad/aura_silero.c
-     * （Phase 3 正式算法）。 */
-    aura_err_t rc;
-    if (g_opts.use_silero) {
-        rc = aura_silero_register();
-        if (rc != AURA_OK) {
-            printf("FAIL: register silero_vad: %s\n", aura_strerror(rc));
-            free(wav);
-            return 1;
-        }
-        cfg.model_dir = AURA_HOST_SIM_SOURCE_DIR "/models";
-        /* 权重不入库（models/download.sh）：没下模型时跳过，别把"没下模型"
-         * 变成一条红灯 —— 与 tests/unit/test_inference.c 同一约定。 */
-        char model_probe[512];
-        snprintf(model_probe, sizeof(model_probe), "%s/vad/silero_vad.mnn/silero_vad.mnn",
-                 cfg.model_dir);
-        FILE *probe = fopen(model_probe, "rb");
-        if (probe == NULL) {
-            printf("SKIP: silero model not found (%s) — run models/download.sh\n", model_probe);
-            free(wav);
-            return 0;
-        }
-        fclose(probe);
-        if (cfg.chain == NULL || cfg.chain[0] == '\0') {
-            cfg.chain = "silero_vad"; /* 没给 .conf/链时用它兜底；给了就以 .conf 为准 */
-        }
-        printf("silero: registered, chain = '%s', models = %s\n", cfg.chain, cfg.model_dir);
-    }
-
-    rc = aura_agent_init(&cfg);
+    aura_err_t rc = aura_agent_init(&cfg);
     if (rc != AURA_OK) {
         printf("FAIL: aura_agent_init: %s\n", aura_strerror(rc));
         free(wav);
@@ -1156,17 +1107,6 @@ int main(int argc, char **argv)
     memset(&judge, 0, sizeof(judge));
     memset(&turn, 0, sizeof(turn));
 
-    /* silero 模式的 VAD 句柄来自配置链（节点归 agent 所有，deinit 时随链回收）。 */
-    if (g_opts.use_silero) {
-        g_vad_nn = (aura_nn_node_t *)aura_agent_chain_node("silero_vad");
-        if (g_vad_nn == NULL) {
-            printf("FAIL: chain node 'silero_vad' not found after init\n");
-            aura_agent_deinit();
-            free(wav);
-            return 1;
-        }
-    }
-
     aura_node_init(&vad.base, "vad", &vad_ops,
                    &(aura_node_caps_t){.consumes_audio = true, .produces_audio = true,
                                        .wants_events = true});
@@ -1192,14 +1132,9 @@ int main(int argc, char **argv)
                             : 0;
     kws.armed = true; /* 状态机 START 事件会确认 Idle；初始即 Idle */
 
-    /* 注册顺序即音频链顺序：vad → kws → asr；tts → sink（自动线性连线）。
-     * silero 模式下 vad 由配置链装配（在 init 里已入链，排在手工节点之前），
-     * 这里不再注册能量 VAD —— 否则音频会先过 silero 再过能量 VAD，判定打架。 */
-    rc = AURA_OK;
-    if (!g_opts.use_silero) {
-        g_vad_energy = &vad;
-        rc           = aura_agent_add_node(&vad.base);
-    }
+    /* 注册顺序即音频链顺序：vad → kws → asr；tts → sink（自动线性连线）。 */
+    g_vad_energy = &vad;
+    rc           = aura_agent_add_node(&vad.base);
     if (rc != AURA_OK ||
         (rc = aura_agent_add_node(&kws.base)) != AURA_OK ||
         (rc = aura_agent_add_node(&asr.base)) != AURA_OK ||
@@ -1259,40 +1194,15 @@ int main(int argc, char **argv)
     }
 
     /* ---- 停链路 + 落盘 ---- */
-    /* 统计要在 deinit 前取：链上的节点归 agent 所有，deinit 后句柄就悬垂了。 */
-    if (g_opts.use_silero && g_vad_nn != NULL) {
-        (void)aura_nn_get_stats(&g_vad_nn->base, &g_vad_stats);
-    }
     aura_agent_stop();
     if (wav != NULL) {
         printf("out: %s\n", g_opts.wav_out);
     }
     aura_agent_deinit();
-    g_vad_nn = NULL; /* 链上节点已随 agent 释放，别留悬垂句柄 */
     free(wav);
 
     /* ---- 断言 ---- */
     aura_profiler_report();
-
-    /* silero 模式：真实 VAD 对合成音频不会触发 —— 推理次数必须 > 0（证明
-     * MNN 在链路里跑了），但状态序列用合成音频无法验证，给出明确提示并跳过。 */
-    if (g_opts.use_silero) {
-        /* 由链上的 silero_vad 节点（NN 适配模板）在 deinit 前快照。 */
-        printf("silero VAD: %llu frames in, %llu inferences, max %.2f ms/inference\n",
-               (unsigned long long)g_vad_stats.frames_in,
-               (unsigned long long)g_vad_stats.windows,
-               (double)g_vad_stats.infer_us_max / 1000.0);
-        if (g_vad_stats.windows == 0) {
-            printf("== host_sim FAIL (silero never ran) ==\n");
-            return 1;
-        }
-        if (g_state_log_count == 0) {
-            printf("SKIP: synthetic audio did not trigger silero — use --wav with recorded "
-                   "speech to validate the full loop with real VAD\n");
-            printf("== host_sim PASS (MNN-in-loop verified; sequence check skipped) ==\n");
-            return 0;
-        }
-    }
 
     bool ok = true;
 

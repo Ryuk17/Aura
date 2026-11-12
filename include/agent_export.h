@@ -116,7 +116,8 @@ typedef struct aura_agent_config {
     const char *config_dir; /* 配置目录 */
     const char *model_dir;  /* 模型根目录 */
 
-    /* 算法链（Phase 2 起），语法：`aec3, ns, tee(silero_vad, kws), asr`。
+    /* 算法链，语法：`aec, bf, ns, agc, tee(vad, kws, sr), asr`。
+     * 名字是 soundproof 适配层的注册名（见 docs/soundproof_integration.md）。
      * NULL/空 = 不自动装配（由上层自行注入节点）。链上每个名字都必须已注册
      * （见 core/algorithm.h），未注册在 init 时返回 AURA_ERR_NOT_FOUND。 */
     const char *chain;
@@ -134,7 +135,7 @@ aura_err_t aura_agent_config_load(aura_agent_config_t *cfg, const char *path);
 
 /* ---------------------------------------------------------------- 生命周期 */
 
-/* 初始化：装载配置、建 pipeline / event_bus / 状态机、按配置初始化推理引擎。
+/* 初始化：装载配置、注册 soundproof 适配节点、建 pipeline / event_bus / 状态机。
  * 此时不启动音频链路（不占用实时资源）。重复调用返回 AURA_ERR_EXIST。 */
 aura_err_t aura_agent_init(const aura_agent_config_t *cfg);
 

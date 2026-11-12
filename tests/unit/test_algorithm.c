@@ -1,7 +1,7 @@
 /* 算法统一接口单测：注册表 / 参数 / 链语法 / 链组装 / 流形状传播 / 观察者不截断主线
  *
- * 这里用**测试自带的 mock 描述表**而不是真实算法：契约层的正确性与 TrickRoom、
- * MNN 是否在场无关，纯 C 全平台可跑（真实适配器另有 test_dsp_adapter.c）。
+ * 这里用**测试自带的 mock 描述表**而不是真实算法：契约层的正确性与 soundproof、
+ * MNN 是否在场无关，纯 C 全平台可跑（真实适配器另有 tests/soundproof_chain）。
  */
 #include "aura_test.h"
 

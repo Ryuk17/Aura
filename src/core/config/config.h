@@ -58,8 +58,8 @@ typedef struct aura_config {
     char     config_dir[256];
     char     model_dir[256];
 
-    /* 算法链（Phase 2 起）：`aec3, ns, tee(silero_vad, kws)`。
-     * 空 = 不自动装配（上层自己注入节点）。语法见 core/algorithm.h。 */
+    /* 算法链：`aec, bf, ns, agc, tee(vad, kws, sr), asr`。
+     * 名字是 soundproof 适配层的注册名；空 = 不自动装配。语法见 core/algorithm.h。 */
     char     chain[256];
     aura_config_kv_t chain_params[AURA_CONFIG_MAX_CHAIN_PARAMS];
     uint32_t         chain_param_count;

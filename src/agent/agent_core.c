@@ -10,7 +10,7 @@
  * kws/asr/llm 函数 —— 只消费事件，通过 pipeline 消息下发启停。
  *
  * 算法节点有两条来源（Phase 2 起）：
- *   配置 `chain = aec3, ns, tee(silero_vad), ...` —— init 时按名字装配（本层不
+ *   配置 `chain = bf, aec, ns, tee(vad, kws, sr), asr` —— init 时按名字装配（本层不
  *     认识任何具体算法，算法族由上层在 init 前注册，见 core/algorithm.h）；
  *   aura_agent_add_node()（agent_core.h，内部接口）—— 手工注入，测试与定制用。
  */
@@ -21,14 +21,13 @@
 #include <string.h>
 
 #include "aura_config.h" /* CMake 生成的编译期配置 */
-#if AURA_WITH_MNN
-#include "algorithm/aura_nn_adapter.h" /* 只为把 model_dir 交给 NN 节点（见 init） */
-#endif
-#if AURA_WITH_TRICKROOM
-#include "dsp/aura_dsp_adapter.h" /* 注册 TrickRoom 描述表（aec3/bf/ns/agc/src/vad） */
-#endif
+#include "agent/flow/flow_bridge.h"
+#include "agent/flow/flow_bus.h"
+#include "agent/flow/flow_middleware.h"
 #include "core/algorithm.h"
 #include "core/config/config.h"
+#include "soundproof/ae_common.h"
+#include "soundproof/ae_register.h"
 #include "utils/logger/logger.h"
 #include "utils/profiler/profiler.h"
 
@@ -43,7 +42,8 @@ static struct {
     aura_pipeline_t     *pipeline;
     aura_event_bus_t    *bus;
     aura_sm_t           *sm;
-    aura_model_mgr_t    *models;
+    aura_flow_bus_t     *flow;
+    aura_flow_bridge_t  *flow_bridge;
     aura_agent_event_cb  cb;
     void                *cb_user;
     aura_mutex_t        *lock;
@@ -190,11 +190,11 @@ const char *aura_agent_build_info(void)
 {
     static char info[256];
     snprintf(info, sizeof(info),
-             "os=%s platform=%s kws=%d voiceprint=%d asr=%d llm=%d tts=%d barge_in=%d net=%d "
-             "mnn=%d mnn_llm=%d",
+             "os=%s platform=%s kws=%d sr=%d asr=%d llm=%d tts=%d barge_in=%d net=%d "
+             "soundproof=%d mnn=%d llm_engine=%d",
              AURA_OS_NAME, AURA_PLATFORM_NAME, AURA_BUILD_KWS, AURA_BUILD_VOICEPRINT,
              AURA_BUILD_ASR, AURA_BUILD_LLM, AURA_BUILD_TTS, AURA_BUILD_BARGE_IN, AURA_BUILD_NET,
-             AURA_WITH_MNN, AURA_WITH_MNN_LLM);
+             AURA_WITH_SOUNDPROOF, AURA_WITH_SOUNDPROOF_MNN, AURA_WITH_SOUNDPROOF_LLM);
     return info;
 }
 
@@ -348,16 +348,17 @@ static void teardown(void)
         aura_chain_destroy_nodes(g.chain_nodes, g.chain_node_count);
         g.chain_node_count = 0;
     }
+    if (g.flow_bridge != NULL) {
+        aura_flow_bridge_destroy(g.flow_bridge);
+        g.flow_bridge = NULL;
+    }
+    if (g.flow != NULL) {
+        aura_flow_bus_destroy(g.flow);
+        g.flow = NULL;
+    }
     if (g.bus != NULL) {
         aura_event_bus_destroy(g.bus);
         g.bus = NULL;
-    }
-    if (g.models != NULL) {
-        aura_model_mgr_destroy(g.models);
-        g.models = NULL;
-    }
-    if (AURA_WITH_MNN) {
-        aura_infer_deinit(); /* 未初始化时是空操作 */
     }
     if (g.lock != NULL) {
         aura_osal_mutex_destroy(g.lock);
@@ -381,20 +382,20 @@ aura_err_t aura_agent_init(const aura_agent_config_t *cfg)
     aura_log_set_level((aura_log_level_t)g.cfg.log_level);
     aura_profiler_init();
 
-#if AURA_WITH_TRICKROOM
-    /* 编译期已带 TrickRoom 时，DSP 族在这里自注册（幂等）—— 不用上层记得去注册，
-     * 否则"编进了引擎但链上写 aec3 说不认识"是最没道理的一种失败。
-     * 必须在 parse_chain_config 之前：链解析要查注册表。 */
+#if AURA_WITH_SOUNDPROOF
+    /* 算法适配节点在链解析之前自注册 —— 否则"编进了引擎但链上写 vad 说不认识"
+     * 是最没道理的一种失败。模型根目录也在这里交给适配层。 */
+    ae_set_model_root(g.cfg.model_dir);
     {
-        aura_err_t rc = aura_dsp_trickroom_register();
+        aura_err_t rc = ae_register_all();
         if (rc != AURA_OK) {
-            AURA_LOGE(TAG, "trickroom algo register failed: %s", aura_strerror(rc));
+            AURA_LOGE(TAG, "soundproof adapter register failed: %s", aura_strerror(rc));
             return rc; /* 此时还没申请任何资源 */
         }
     }
 #endif
 
-    /* 链配置先解析（不占资源）：其余算法族（NN）由上层在 init 前注册。 */
+    /* 链配置先解析（不占资源）：注册表此时已就绪。 */
     if (g.cfg.chain != NULL && g.cfg.chain[0] != '\0') {
         aura_err_t rc = parse_chain_config();
         if (rc != AURA_OK) {
@@ -414,30 +415,6 @@ aura_err_t aura_agent_init(const aura_agent_config_t *cfg)
     g.lock = aura_osal_mutex_create();
     if (g.lock == NULL) {
         return AURA_ERR_NOMEM;
-    }
-
-    /* 推理引擎（MNN）：全局统一配置。 */
-    if (AURA_WITH_MNN) {
-        aura_infer_cfg_t infer;
-        memset(&infer, 0, sizeof(infer));
-        infer.backend       = AURA_INFER_BACKEND_CPU;
-        infer.threads       = 2;
-        infer.precision_low = true;
-        infer.memory_low    = false;
-        aura_err_t rc = aura_infer_init(&infer);
-        if (rc != AURA_OK) {
-            AURA_LOGE(TAG, "infer init failed: %s", aura_strerror(rc));
-            teardown();
-            return rc;
-        }
-        /* 模型根目录：链上的 NN 节点按 <root>/<desc.model_file> 找模型，描述表里
-         * 只写相对路径（换板子只改配置）。指向 g.cfg.model_dir，生命周期同配置。 */
-        (void)aura_nn_set_model_root(g.cfg.model_dir);
-        g.models = aura_model_mgr_create();
-        if (g.models == NULL) {
-            teardown();
-            return AURA_ERR_NOMEM;
-        }
     }
 
     /* pipeline + event_bus + 状态机 */
@@ -462,6 +439,23 @@ aura_err_t aura_agent_init(const aura_agent_config_t *cfg)
         return AURA_ERR_NOMEM;
     }
     aura_pipeline_attach_bus(g.pipeline, g.bus);
+
+    /* Agent 数据流中间件：会话/轮次/工具/记忆的控制面。
+     * 音频面仍走 pipeline；这里只建立总线与 event_bus 桥。具体 stage 在
+     * Phase B/C 由 agent 层创建。 */
+    g.flow = aura_flow_bus_create(64, AURA_FLOW_DROP_OLDEST);
+    if (g.flow == NULL) {
+        teardown();
+        return AURA_ERR_NOMEM;
+    }
+    (void)aura_flow_mw_add(g.flow, "trace", aura_flow_mw_trace, NULL);
+    (void)aura_flow_mw_add(g.flow, "cancel_gate", aura_flow_mw_cancel_gate, NULL);
+    (void)aura_flow_mw_add(g.flow, "metrics", aura_flow_mw_metrics, NULL);
+    g.flow_bridge = aura_flow_bridge_create(g.flow, g.bus);
+    if (g.flow_bridge == NULL) {
+        teardown();
+        return AURA_ERR_NOMEM;
+    }
 
     aura_sm_cfg_t sc;
     memset(&sc, 0, sizeof(sc));
@@ -505,8 +499,7 @@ aura_err_t aura_agent_start(void)
         return AURA_ERR_STATE;
     }
     if (g.node_count == 0) {
-        AURA_LOGW(TAG, "no algorithm nodes registered — feed_audio will fail until Phase 2–4 "
-                       "modules are added");
+        AURA_LOGW(TAG, "no algorithm nodes registered — configure a chain (see configs/agent/)");
     }
     if (g.cfg.profiler_enable) {
         aura_profiler_begin_session();
@@ -650,9 +643,9 @@ aura_event_bus_t *aura_agent_bus(void)
     return g.bus;
 }
 
-aura_model_mgr_t *aura_agent_models(void)
+aura_flow_bus_t *aura_agent_flow(void)
 {
-    return g.models;
+    return g.flow;
 }
 
 aura_sm_t *aura_agent_sm(void)

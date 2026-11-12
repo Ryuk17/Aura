@@ -62,7 +62,7 @@ aura_err_t aura_node_emit_audio(aura_node_t *self, const aura_audio_frame_t *fra
     }
 
     /* 扇出：每个下游各拿一份独立的池拷贝。不做引用计数 —— 一帧 ≤8KB，拷贝成本
-     * 远低于共享生命周期的复杂度（见 docs/algorithm_unified_api.md 取舍节）。
+     * 远低于共享生命周期的复杂度（见 docs/soundproof_integration.md 取舍节）。
      * 注意帧池占用随扇出宽度线性增长（见 aura_pipeline_cfg.frame_pool_blocks）。 */
     aura_err_t last = AURA_OK;
     for (uint32_t i = 0; i < self->next_audio_count; i++) {
