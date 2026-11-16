@@ -21,17 +21,23 @@
 #include <string.h>
 
 #include "aura_config.h" /* CMake 生成的编译期配置 */
+#include "agent/agent_stages.h"
 #include "agent/flow/flow_bridge.h"
 #include "agent/flow/flow_bus.h"
 #include "agent/flow/flow_middleware.h"
+#include "agent/flow/flow_store.h"
 #include "core/algorithm.h"
 #include "core/config/config.h"
+#include "core/playback/playback.h"
 #include "soundproof/ae_common.h"
 #include "soundproof/ae_register.h"
 #include "utils/logger/logger.h"
 #include "utils/profiler/profiler.h"
 
 #define TAG "agent"
+
+/* flow retry 中间件配置：只在 handler 明确返回 AURA_ERR_AGAIN 时重投一次。 */
+static aura_flow_retry_cfg_t s_retry_cfg = {1};
 
 /* ------------------------------------------------------------ 单例状态 */
 
@@ -44,6 +50,8 @@ static struct {
     aura_sm_t           *sm;
     aura_flow_bus_t     *flow;
     aura_flow_bridge_t  *flow_bridge;
+    aura_flow_store_t   *store;
+    aura_agent_stages_t *stages;
     aura_agent_event_cb  cb;
     void                *cb_user;
     aura_mutex_t        *lock;
@@ -53,6 +61,9 @@ static struct {
      * pipeline 只管输入队列，节点结构体归调用方（见 aura_pipeline_remove）。 */
     aura_node_t         *chain_nodes[AURA_CHAIN_MAX_LINKS];
     uint32_t             chain_node_count;
+    /* 播放链节点（tts, src, playback）；与采集链同属一个 pipeline。 */
+    aura_node_t         *playback_nodes[AURA_CHAIN_MAX_LINKS];
+    uint32_t             playback_node_count;
 } g;
 
 /* 状态枚举值必须与内部状态机一致（agent_export.h 注释里的约定）。 */
@@ -98,6 +109,11 @@ static void on_bus_event(const aura_event_t *event, void *user)
         if (trig != AURA_TRIG_NONE) {
             (void)aura_sm_handle(g.sm, trig);
         }
+    }
+
+    /* barge-in 的 flow 侧动作：取消当前 turn，cancel_gate 丢弃后续消息。 */
+    if (event->type == AURA_EVENT_BARGE_IN && g.stages != NULL) {
+        aura_agent_stages_on_barge_in(g.stages);
     }
 
     /* 再按需转发给上层回调 */
@@ -216,6 +232,7 @@ void aura_agent_config_default(aura_agent_config_t *cfg)
     cfg->auto_reset_ms     = 1000;
     cfg->board             = "default";
     cfg->model_dir         = "models";
+    cfg->playback_sample_rate = 24000; /* Kokoro TTS 默认输出率 */
 }
 
 aura_err_t aura_agent_config_load(aura_agent_config_t *cfg, const char *path)
@@ -238,6 +255,10 @@ aura_err_t aura_agent_config_load(aura_agent_config_t *cfg, const char *path)
     static char s_chain_keys[AURA_CONFIG_MAX_CHAIN_PARAMS][48];
     static char s_chain_vals[AURA_CONFIG_MAX_CHAIN_PARAMS][64];
     static aura_agent_chain_param_t s_chain_params[AURA_CONFIG_MAX_CHAIN_PARAMS];
+    static char s_pb_chain[256];
+    static char s_pb_keys[AURA_CONFIG_MAX_CHAIN_PARAMS][48];
+    static char s_pb_vals[AURA_CONFIG_MAX_CHAIN_PARAMS][64];
+    static aura_agent_chain_param_t s_pb_params[AURA_CONFIG_MAX_CHAIN_PARAMS];
 
     aura_agent_config_default(cfg);
     cfg->sample_rate       = core.sample_rate;
@@ -268,6 +289,22 @@ aura_err_t aura_agent_config_load(aura_agent_config_t *cfg, const char *path)
     }
     cfg->chain_param_count = core.chain_param_count;
     cfg->chain_params      = (cfg->chain_param_count > 0) ? s_chain_params : NULL;
+
+    /* 播放链（Phase C） */
+    snprintf(s_pb_chain, sizeof(s_pb_chain), "%s", core.playback_chain);
+    cfg->playback_chain = (s_pb_chain[0] != '\0') ? s_pb_chain : NULL;
+    for (uint32_t i = 0; i < core.playback_chain_param_count &&
+                        i < AURA_CONFIG_MAX_CHAIN_PARAMS;
+         i++) {
+        snprintf(s_pb_keys[i], sizeof(s_pb_keys[i]), "%s", core.playback_chain_params[i].key);
+        snprintf(s_pb_vals[i], sizeof(s_pb_vals[i]), "%s", core.playback_chain_params[i].val);
+        s_pb_params[i].key = s_pb_keys[i];
+        s_pb_params[i].val = s_pb_vals[i];
+    }
+    cfg->playback_chain_param_count = core.playback_chain_param_count;
+    cfg->playback_chain_params =
+        (cfg->playback_chain_param_count > 0) ? s_pb_params : NULL;
+    cfg->playback_sample_rate = core.playback_sample_rate;
     return AURA_OK;
 }
 
@@ -324,6 +361,87 @@ static aura_err_t build_chain(void)
     return AURA_OK;
 }
 
+/* -------------------------------------------------- 播放链（Phase C） */
+
+static aura_config_t s_playback_cfg; /* 参数里的字符串指向这里，生命周期覆盖 build */
+static aura_chain_t  s_playback_chain;
+
+static aura_err_t parse_playback_chain_config(void)
+{
+    aura_config_default(&s_playback_cfg);
+    snprintf(s_playback_cfg.playback_chain, sizeof(s_playback_cfg.playback_chain), "%s",
+             g.cfg.playback_chain);
+    s_playback_cfg.playback_sample_rate = g.cfg.playback_sample_rate;
+    s_playback_cfg.frame_ms             = 10;
+    s_playback_cfg.channels             = 1;
+
+    for (uint32_t i = 0; i < g.cfg.playback_chain_param_count; i++) {
+        const aura_agent_chain_param_t *src = &g.cfg.playback_chain_params[i];
+        if (src->key == NULL || src->val == NULL) {
+            return AURA_ERR_INVALID_ARG;
+        }
+        if (s_playback_cfg.playback_chain_param_count >= AURA_CONFIG_MAX_CHAIN_PARAMS) {
+            AURA_LOGE(TAG, "too many playback chain params (max %d)",
+                      AURA_CONFIG_MAX_CHAIN_PARAMS);
+            return AURA_ERR_FULL;
+        }
+        aura_config_kv_t *kv =
+            &s_playback_cfg.playback_chain_params[s_playback_cfg.playback_chain_param_count];
+        if (strlen(src->key) >= sizeof(kv->key) || strlen(src->val) >= sizeof(kv->val)) {
+            AURA_LOGE(TAG, "playback chain param '%s' too long", src->key);
+            return AURA_ERR_INVALID_ARG;
+        }
+        snprintf(kv->key, sizeof(kv->key), "%s", src->key);
+        snprintf(kv->val, sizeof(kv->val), "%s", src->val);
+        s_playback_cfg.playback_chain_param_count++;
+    }
+    return aura_chain_from_playback_config(&s_playback_cfg, &s_playback_chain);
+}
+
+static aura_err_t build_playback_chain(void)
+{
+    uint32_t   built = 0;
+    aura_err_t rc =
+        aura_chain_build(g.pipeline, &s_playback_chain, g.playback_nodes, &built);
+    if (rc != AURA_OK) {
+        g.playback_node_count = 0;
+        return rc;
+    }
+    g.playback_node_count = built;
+    g.node_count += built;
+    AURA_LOGI(TAG, "playback chain assembled: %u node(s), %u Hz from '%s'", built,
+              g.cfg.playback_sample_rate, g.cfg.playback_chain);
+    return AURA_OK;
+}
+
+/* 播放 sink → AEC 参考流。sink 输出已是管线主采样率（SRC 之后）。 */
+static void playback_ref_sink(void *user, const int16_t *pcm, uint32_t frame_count,
+                              uint32_t channels, uint64_t pts_us)
+{
+    (void)user;
+    if (g.pipeline == NULL || pcm == NULL || frame_count == 0) {
+        return;
+    }
+    (void)aura_pipeline_feed_ref(g.pipeline, pcm, frame_count, channels, AURA_SAMPLE_S16,
+                                 pts_us, 0);
+}
+
+/* flow tts.say → 播放链的文本源（TTS 节点）。 */
+static aura_err_t tts_feed_cb(void *user, const char *text, const aura_flow_ctx_t *ctx)
+{
+    (void)user;
+    (void)ctx;
+    if (g.pipeline == NULL || s_playback_chain.count == 0 || text == NULL) {
+        return AURA_OK;
+    }
+    aura_err_t rc = aura_pipeline_feed_text(g.pipeline, text, (uint32_t)strlen(text),
+                                            AURA_TEXT_FINAL, aura_osal_time_us(), 0);
+    if (rc != AURA_OK) {
+        AURA_LOGW(TAG, "tts feed failed: %s", aura_strerror(rc));
+    }
+    return AURA_OK;
+}
+
 /* 释放 init 申请的全部资源（幂等）。init 的失败路径与 deinit 共用 ——
  * 否则一次失败的 init 会把引擎/pipeline/锁留在原地，调用方既无法 deinit
  * （inited 还是 false），第二次 init 又会撞上 "infer already exists"，
@@ -347,6 +465,19 @@ static void teardown(void)
     if (g.chain_node_count > 0) {
         aura_chain_destroy_nodes(g.chain_nodes, g.chain_node_count);
         g.chain_node_count = 0;
+    }
+    if (g.playback_node_count > 0) {
+        aura_chain_destroy_nodes(g.playback_nodes, g.playback_node_count);
+        g.playback_node_count = 0;
+    }
+    /* stage 的订阅表持有 flow bus 指针，必须先于 bus 销毁。 */
+    if (g.stages != NULL) {
+        aura_agent_stages_destroy(g.stages);
+        g.stages = NULL;
+    }
+    if (g.store != NULL) {
+        aura_flow_store_destroy(g.store);
+        g.store = NULL;
     }
     if (g.flow_bridge != NULL) {
         aura_flow_bridge_destroy(g.flow_bridge);
@@ -395,6 +526,15 @@ aura_err_t aura_agent_init(const aura_agent_config_t *cfg)
     }
 #endif
 
+    /* 播放 sink 是 core 提供的算法（不依赖 soundproof），先注册再解析播放链。 */
+    {
+        aura_err_t rc = aura_playback_register();
+        if (rc != AURA_OK) {
+            AURA_LOGE(TAG, "playback register failed: %s", aura_strerror(rc));
+            return rc;
+        }
+    }
+
     /* 链配置先解析（不占资源）：注册表此时已就绪。 */
     if (g.cfg.chain != NULL && g.cfg.chain[0] != '\0') {
         aura_err_t rc = parse_chain_config();
@@ -409,6 +549,20 @@ aura_err_t aura_agent_init(const aura_agent_config_t *cfg)
         if (g.cfg.chain_param_count > 0) {
             AURA_LOGW(TAG, "%u chain_params configured but no chain — ignored",
                       g.cfg.chain_param_count);
+        }
+    }
+
+    if (g.cfg.playback_chain != NULL && g.cfg.playback_chain[0] != '\0') {
+        aura_err_t rc = parse_playback_chain_config();
+        if (rc != AURA_OK) {
+            AURA_LOGE(TAG, "playback chain invalid: %s", aura_strerror(rc));
+            return rc;
+        }
+    } else {
+        aura_chain_init(&s_playback_chain);
+        if (g.cfg.playback_chain_param_count > 0) {
+            AURA_LOGW(TAG, "%u playback chain_params configured but no playback_chain — ignored",
+                      g.cfg.playback_chain_param_count);
         }
     }
 
@@ -432,6 +586,8 @@ aura_err_t aura_agent_init(const aura_agent_config_t *cfg)
         teardown();
         return AURA_ERR_NOMEM;
     }
+    /* 播放 sink 的回采参考送进采集链 AEC（pipeline 内按 pts 配对）。 */
+    aura_playback_set_ref_sink(playback_ref_sink, NULL);
 
     g.bus = aura_event_bus_create(64);
     if (g.bus == NULL) {
@@ -448,14 +604,32 @@ aura_err_t aura_agent_init(const aura_agent_config_t *cfg)
         teardown();
         return AURA_ERR_NOMEM;
     }
+    /* 长期存储（Phase B 内存后端；Phase D 换 sqlite）。persist 中间件要用。 */
+    g.store = aura_flow_store_create();
+    if (g.store == NULL) {
+        teardown();
+        return AURA_ERR_NOMEM;
+    }
     (void)aura_flow_mw_add(g.flow, "trace", aura_flow_mw_trace, NULL);
-    (void)aura_flow_mw_add(g.flow, "cancel_gate", aura_flow_mw_cancel_gate, NULL);
     (void)aura_flow_mw_add(g.flow, "metrics", aura_flow_mw_metrics, NULL);
+    (void)aura_flow_mw_add(g.flow, "validate", aura_flow_mw_validate, NULL);
+    (void)aura_flow_mw_add(g.flow, "deadline", aura_flow_mw_deadline, NULL);
+    (void)aura_flow_mw_add(g.flow, "redact", aura_flow_mw_redact, NULL);
+    (void)aura_flow_mw_add(g.flow, "persist", aura_flow_mw_persist, g.store);
+    (void)aura_flow_mw_add(g.flow, "retry", aura_flow_mw_retry, &s_retry_cfg);
+    (void)aura_flow_mw_add(g.flow, "cancel_gate", aura_flow_mw_cancel_gate, NULL);
     g.flow_bridge = aura_flow_bridge_create(g.flow, g.bus);
     if (g.flow_bridge == NULL) {
         teardown();
         return AURA_ERR_NOMEM;
     }
+
+    g.stages = aura_agent_stages_create(g.flow, g.store, g.cfg.config_dir);
+    if (g.stages == NULL) {
+        teardown();
+        return AURA_ERR_NOMEM;
+    }
+    aura_agent_stages_set_tts_feed(g.stages, tts_feed_cb, NULL);
 
     aura_sm_cfg_t sc;
     memset(&sc, 0, sizeof(sc));
@@ -477,6 +651,14 @@ aura_err_t aura_agent_init(const aura_agent_config_t *cfg)
         aura_err_t rc = build_chain();
         if (rc != AURA_OK) {
             AURA_LOGE(TAG, "chain build failed: %s", aura_strerror(rc));
+            teardown();
+            return rc;
+        }
+    }
+    if (s_playback_chain.count > 0) {
+        aura_err_t rc = build_playback_chain();
+        if (rc != AURA_OK) {
+            AURA_LOGE(TAG, "playback chain build failed: %s", aura_strerror(rc));
             teardown();
             return rc;
         }
@@ -504,8 +686,14 @@ aura_err_t aura_agent_start(void)
     if (g.cfg.profiler_enable) {
         aura_profiler_begin_session();
     }
-    aura_err_t rc = aura_pipeline_start(g.pipeline);
+    /* stage 先起，避免 pipeline 一启动就有事件进来却没人消费。 */
+    aura_err_t rc = aura_agent_stages_start(g.stages);
     if (rc != AURA_OK) {
+        return rc;
+    }
+    rc = aura_pipeline_start(g.pipeline);
+    if (rc != AURA_OK) {
+        (void)aura_agent_stages_stop(g.stages);
         return rc;
     }
     g.started = true;
@@ -520,7 +708,9 @@ aura_err_t aura_agent_stop(void)
         return AURA_OK; /* 幂等 */
     }
     g.started = false;
-    return aura_pipeline_stop(g.pipeline);
+    aura_err_t rc = aura_pipeline_stop(g.pipeline);
+    aura_err_t rc2 = aura_agent_stages_stop(g.stages);
+    return (rc != AURA_OK) ? rc : rc2;
 }
 
 aura_err_t aura_agent_deinit(void)
@@ -585,12 +775,23 @@ aura_err_t aura_agent_feed_ref_audio(const void *pcm, uint32_t frame_count, uint
                                   pts_us, timeout_ms);
 }
 
+aura_err_t aura_agent_set_playback_backend(const aura_playback_backend_t *backend)
+{
+    if (g.inited && g.started) {
+        return AURA_ERR_STATE; /* 设备打开后不允许换后端 */
+    }
+    aura_playback_set_backend(backend);
+    return AURA_OK;
+}
+
 aura_err_t aura_agent_interrupt(void)
 {
     if (!g.inited || g.pipeline == NULL) {
         return AURA_ERR_STATE;
     }
-    /* 打断语义：清在途数据 + 广播 BARGE_IN（各节点据此停播/停推理）+ 状态机回 Listening。 */
+    /* 打断语义：先取消 flow turn（cancel_gate 丢下游），再清在途音频 +
+     * 广播 BARGE_IN（各节点据此停播/停推理）+ 状态机回 Listening。 */
+    aura_agent_stages_on_barge_in(g.stages);
     aura_err_t rc = aura_pipeline_flush(g.pipeline);
     if (g.bus != NULL) {
         aura_event_bus_post(g.bus, AURA_EVENT_BARGE_IN, 0, "external");
@@ -646,6 +847,16 @@ aura_event_bus_t *aura_agent_bus(void)
 aura_flow_bus_t *aura_agent_flow(void)
 {
     return g.flow;
+}
+
+aura_agent_stages_t *aura_agent_stages_get(void)
+{
+    return g.stages;
+}
+
+aura_flow_store_t *aura_agent_store(void)
+{
+    return g.store;
 }
 
 aura_sm_t *aura_agent_sm(void)

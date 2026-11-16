@@ -39,6 +39,7 @@ struct aura_pipeline {
     aura_pipeline_stats_t stats;
 
     uint64_t next_pts_us; /* 外部喂帧时的自动 pts 推进 */
+    uint32_t text_seq;    /* 外部喂文本时的 utterance 内序号 */
     bool     running;
     bool     inited; /* ops->init 是否已成功执行（stop 时据此决定是否调 ops->stop） */
 };
@@ -754,6 +755,71 @@ aura_err_t aura_pipeline_feed(aura_pipeline_t *p, const void *pcm, uint32_t fram
     }
     aura_osal_mutex_lock(p->lock);
     p->stats.frames_in++;
+    aura_osal_mutex_unlock(p->lock);
+    return AURA_OK;
+}
+
+/* 文本源：消费文本、且没有任何节点的 next_text 指向它。 */
+static aura_node_t *find_text_source(aura_pipeline_t *p)
+{
+    for (uint32_t i = 0; i < p->node_count; i++) {
+        aura_node_t *n = p->nodes[i];
+        if (n->in_text == NULL) {
+            continue;
+        }
+        bool has_upstream = false;
+        for (uint32_t j = 0; j < p->node_count; j++) {
+            if (p->nodes[j]->next_text == n) {
+                has_upstream = true;
+                break;
+            }
+        }
+        if (!has_upstream) {
+            return n;
+        }
+    }
+    return NULL;
+}
+
+aura_err_t aura_pipeline_feed_text(aura_pipeline_t *p, const char *text, uint32_t len,
+                                   aura_text_flag_t flag, uint64_t pts_us, uint32_t timeout_ms)
+{
+    if (p == NULL || text == NULL) {
+        return AURA_ERR_INVALID_ARG;
+    }
+    if (!p->running) {
+        return AURA_ERR_STATE;
+    }
+    aura_node_t *dst = find_text_source(p);
+    if (dst == NULL) {
+        return AURA_ERR_NOT_FOUND;
+    }
+
+    aura_text_chunk_t chunk;
+    memset(&chunk, 0, sizeof(chunk));
+    uint32_t n = len;
+    if (n >= sizeof(chunk.text)) {
+        n = (uint32_t)sizeof(chunk.text) - 1;
+    }
+    memcpy(chunk.text, text, n);
+    chunk.text[n] = '\0';
+    chunk.len     = n;
+    chunk.flag    = flag;
+    chunk.pts_us  = pts_us;
+    chunk.source  = AURA_TEXT_SRC_AGENT;
+
+    aura_osal_mutex_lock(p->lock);
+    chunk.seq = ++p->text_seq;
+    aura_osal_mutex_unlock(p->lock);
+
+    if (aura_osal_queue_push(dst->in_text, &chunk, timeout_ms) != AURA_OK) {
+        aura_osal_mutex_lock(p->lock);
+        p->stats.text_dropped++;
+        aura_osal_mutex_unlock(p->lock);
+        return AURA_ERR_FULL;
+    }
+    aura_osal_mutex_lock(p->lock);
+    p->stats.text_in++;
     aura_osal_mutex_unlock(p->lock);
     return AURA_OK;
 }

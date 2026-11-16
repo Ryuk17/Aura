@@ -649,36 +649,38 @@ static aura_err_t param_from_text(aura_algo_params_t *params, const char *name, 
     }
 }
 
-aura_err_t aura_chain_from_config(const struct aura_config *cfg, aura_chain_t *out)
+static aura_err_t chain_from_parts(const char *chain, const aura_config_kv_t *params,
+                                   uint32_t param_count, uint32_t sample_rate, uint32_t frame_ms,
+                                   uint32_t channels, aura_chain_t *out)
 {
-    if (cfg == NULL || out == NULL) {
+    if (chain == NULL || out == NULL) {
         return AURA_ERR_INVALID_ARG;
     }
     aura_chain_init(out);
 
-    if (cfg->chain[0] == '\0') {
-        if (cfg->chain_param_count > 0) {
+    if (chain[0] == '\0') {
+        if (param_count > 0) {
             /* 只给了参数没给链：多半是把 chain 这个键敲错了（chian / nodes ...）。
              * 静默忽略会让"改了配置怎么没生效"再犯一次。 */
             AURA_LOGE(TAG, "%u chain_param_* key(s) but no 'chain' — check the key spelling",
-                      cfg->chain_param_count);
+                      param_count);
             return AURA_ERR_INVALID_ARG;
         }
         return AURA_OK; /* 空链不是错误：就是"这份构建手工装节点" */
     }
 
-    aura_err_t rc = aura_chain_parse(cfg->chain, out);
+    aura_err_t rc = aura_chain_parse(chain, out);
     if (rc != AURA_OK) {
-        AURA_LOGE(TAG, "chain syntax error: '%s'", cfg->chain);
+        AURA_LOGE(TAG, "chain syntax error: '%s'", chain);
         return rc;
     }
-    out->sample_rate = cfg->sample_rate;
-    out->frame_ms    = cfg->frame_ms;
-    out->channels    = cfg->channels;
+    out->sample_rate = sample_rate;
+    out->frame_ms    = frame_ms;
+    out->channels    = channels;
 
-    for (uint32_t i = 0; i < cfg->chain_param_count; i++) {
-        const char *kv  = cfg->chain_params[i].key; /* "<algo>.<param>" */
-        const char *val = cfg->chain_params[i].val;
+    for (uint32_t i = 0; i < param_count; i++) {
+        const char *kv  = params[i].key; /* "<algo>.<param>" */
+        const char *val = params[i].val;
         const char *dot = strchr(kv, '.');
         if (dot == NULL || dot == kv || dot[1] == '\0') {
             AURA_LOGE(TAG, "chain_param '%s': expected '<algo>.<param>'", kv);
@@ -734,10 +736,29 @@ aura_err_t aura_chain_from_config(const struct aura_config *cfg, aura_chain_t *o
             matched++;
         }
         if (matched == 0) {
-            AURA_LOGE(TAG, "chain_param '%s': algo '%s' is not in chain '%s'", kv, algo, cfg->chain);
+            AURA_LOGE(TAG, "chain_param '%s': algo '%s' is not in chain '%s'", kv, algo, chain);
             return AURA_ERR_NOT_FOUND;
         }
         AURA_LOGD(TAG, "chain_param %s = %s -> %u node(s)", kv, val, matched);
     }
     return AURA_OK;
+}
+
+aura_err_t aura_chain_from_config(const struct aura_config *cfg, aura_chain_t *out)
+{
+    if (cfg == NULL || out == NULL) {
+        return AURA_ERR_INVALID_ARG;
+    }
+    return chain_from_parts(cfg->chain, cfg->chain_params, cfg->chain_param_count,
+                            cfg->sample_rate, cfg->frame_ms, cfg->channels, out);
+}
+
+aura_err_t aura_chain_from_playback_config(const struct aura_config *cfg, aura_chain_t *out)
+{
+    if (cfg == NULL || out == NULL) {
+        return AURA_ERR_INVALID_ARG;
+    }
+    uint32_t rate = (cfg->playback_sample_rate > 0) ? cfg->playback_sample_rate : 24000;
+    return chain_from_parts(cfg->playback_chain, cfg->playback_chain_params,
+                            cfg->playback_chain_param_count, rate, 10, 1, out);
 }

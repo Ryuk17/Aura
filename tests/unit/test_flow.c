@@ -14,6 +14,26 @@
 #include "agent/flow/flow_store.h"
 #include "core/event_bus/event_bus.h"
 
+static _Atomic int g_retry_calls;
+static _Atomic int g_capture_count;
+static char        g_capture[1024];
+
+static aura_err_t handler_capture(aura_flow_msg_t *msg, void *user)
+{
+    (void)user;
+    snprintf(g_capture, sizeof(g_capture), "%s", msg->payload);
+    atomic_fetch_add(&g_capture_count, 1);
+    return AURA_OK;
+}
+
+static aura_err_t handler_flaky(aura_flow_msg_t *msg, void *user)
+{
+    (void)msg;
+    (void)user;
+    int n = atomic_fetch_add(&g_retry_calls, 1);
+    return (n == 0) ? AURA_ERR_AGAIN : AURA_OK;
+}
+
 static _Atomic int g_count_a;
 static _Atomic int g_count_b;
 static _Atomic int g_count_h;
@@ -229,6 +249,100 @@ AURA_TEST(test_flow_bridge)
     aura_flow_bridge_destroy(bridge);
     aura_event_bus_destroy(ev);
     aura_flow_bus_destroy(flow);
+}
+
+AURA_TEST(test_flow_mw_validate_deadline_redact)
+{
+    atomic_store(&g_capture_count, 0);
+    g_capture[0] = '\0';
+    aura_flow_bus_t *bus = aura_flow_bus_create(8, AURA_FLOW_DROP_OLDEST);
+    AURA_ASSERT(bus != NULL);
+    AURA_ASSERT_EQ(aura_flow_mw_add(bus, "validate", aura_flow_mw_validate, NULL), AURA_OK);
+    AURA_ASSERT_EQ(aura_flow_mw_add(bus, "deadline", aura_flow_mw_deadline, NULL), AURA_OK);
+    AURA_ASSERT_EQ(aura_flow_mw_add(bus, "redact", aura_flow_mw_redact, NULL), AURA_OK);
+    aura_flow_stage_t *s = aura_flow_stage_create(bus, "capture", handler_capture, NULL, 8,
+                                                   AURA_FLOW_DROP_OLDEST);
+    AURA_ASSERT(s != NULL);
+    AURA_ASSERT_EQ(aura_flow_stage_subscribe(s, "t"), AURA_OK);
+    AURA_ASSERT_EQ(aura_flow_stage_start(s), AURA_OK);
+
+    /* 过期消息 */
+    aura_flow_msg_t m;
+    memset(&m, 0, sizeof(m));
+    m.kind = AURA_FLOW_TEXT;
+    snprintf(m.topic, sizeof(m.topic), "t");
+    snprintf(m.payload, sizeof(m.payload), "expired");
+    m.len = (uint32_t)strlen(m.payload);
+    m.ctx.session_id = 1;
+    m.ctx.turn_id = 1;
+    m.ctx.deadline_us = aura_osal_time_us() - 1;
+    AURA_ASSERT_EQ(aura_flow_publish(bus, &m), AURA_OK);
+
+    /* 脱敏 */
+    AURA_ASSERT_EQ(publish_text_raw(bus, "t", "password=hunter2 token=abc 13812345678", 1, 1),
+                   AURA_OK);
+
+    /* 非法长度 */
+    memset(&m, 0, sizeof(m));
+    m.kind = AURA_FLOW_TEXT;
+    snprintf(m.topic, sizeof(m.topic), "t");
+    m.len = AURA_FLOW_PAYLOAD_MAX;
+    AURA_ASSERT_EQ(aura_flow_publish(bus, &m), AURA_OK);
+
+    aura_test_sleep_ms(250);
+    AURA_ASSERT_EQ(atomic_load(&g_capture_count), 1);
+    AURA_ASSERT(strstr(g_capture, "password=*******") != NULL);
+    AURA_ASSERT(strstr(g_capture, "token=***") != NULL);
+    AURA_ASSERT(strstr(g_capture, "138****5678") != NULL);
+    AURA_ASSERT(strstr(g_capture, "hunter2") == NULL);
+
+    aura_flow_stage_destroy(s);
+    aura_flow_bus_destroy(bus);
+}
+
+AURA_TEST(test_flow_mw_persist)
+{
+    aura_flow_bus_t *bus = aura_flow_bus_create(8, AURA_FLOW_DROP_OLDEST);
+    aura_flow_store_t *store = aura_flow_store_create();
+    AURA_ASSERT(bus != NULL && store != NULL);
+    AURA_ASSERT_EQ(aura_flow_mw_add(bus, "persist", aura_flow_mw_persist, store), AURA_OK);
+    aura_flow_stage_t *s = aura_flow_stage_create(bus, "noop", handler_b, NULL, 8,
+                                                   AURA_FLOW_DROP_OLDEST);
+    AURA_ASSERT(s != NULL);
+    AURA_ASSERT_EQ(aura_flow_stage_subscribe(s, "asr.final"), AURA_OK);
+    AURA_ASSERT_EQ(aura_flow_stage_start(s), AURA_OK);
+
+    AURA_ASSERT_EQ(publish_text_raw(bus, "asr.final", "hello", 5, 1), AURA_OK);
+    aura_test_sleep_ms(200);
+
+    char buf[64];
+    AURA_ASSERT_EQ(aura_flow_store_get(store, 5, "asr.final", buf, sizeof(buf)), AURA_OK);
+    AURA_ASSERT_STREQ(buf, "hello");
+
+    aura_flow_stage_destroy(s);
+    aura_flow_store_destroy(store);
+    aura_flow_bus_destroy(bus);
+}
+
+AURA_TEST(test_flow_mw_retry)
+{
+    atomic_store(&g_retry_calls, 0);
+    aura_flow_bus_t *bus = aura_flow_bus_create(8, AURA_FLOW_DROP_OLDEST);
+    AURA_ASSERT(bus != NULL);
+    aura_flow_retry_cfg_t cfg = {2};
+    AURA_ASSERT_EQ(aura_flow_mw_add(bus, "retry", aura_flow_mw_retry, &cfg), AURA_OK);
+    aura_flow_stage_t *s = aura_flow_stage_create(bus, "flaky", handler_flaky, NULL, 8,
+                                                   AURA_FLOW_DROP_OLDEST);
+    AURA_ASSERT(s != NULL);
+    AURA_ASSERT_EQ(aura_flow_stage_subscribe(s, "r"), AURA_OK);
+    AURA_ASSERT_EQ(aura_flow_stage_start(s), AURA_OK);
+
+    AURA_ASSERT_EQ(publish_text_raw(bus, "r", "x", 1, 1), AURA_OK);
+    aura_test_sleep_ms(300);
+    AURA_ASSERT_EQ(atomic_load(&g_retry_calls), 2);
+
+    aura_flow_stage_destroy(s);
+    aura_flow_bus_destroy(bus);
 }
 
 AURA_TEST_MAIN()

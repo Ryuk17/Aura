@@ -24,6 +24,8 @@
  *   NN_ASYNC  单次推理远超一帧时长，必须抛子任务（ASR/LLM/TTS）。
  *             子任务**不得** emit_audio/emit_text（那些接口绑定节点 task 上下文），
  *             结果经私有队列 + 内部事件回到 on_event 再产出（见 src/soundproof/ae_asr_node.c）。
+ *             唯一例外：音频源节点（produces_audio && !consumes_audio，如 TTS）
+ *             没有输入帧，允许在自有 worker 中 emit_audio（见 node.h 的 pts 例外）。
  *
  * ---------------------------------------------------------------------------
  * 分层注意：本文件属于 core，**只能依赖 core 及以下**。
@@ -294,6 +296,10 @@ struct aura_config;
  * cfg 内部的缓冲（见 aura_algo_param_t 的字符串约定）。
  * cfg->chain 为空 = 空链：返回 AURA_OK 且 out->count == 0，不是错误。 */
 aura_err_t aura_chain_from_config(const struct aura_config *cfg, aura_chain_t *out);
+
+/* 同上，但读取 playback_chain / playback_chain_param_*，链首形状取
+ * playback_sample_rate / 10ms / 1ch（TTS 输出 → SRC → playback）。 */
+aura_err_t aura_chain_from_playback_config(const struct aura_config *cfg, aura_chain_t *out);
 
 #ifdef __cplusplus
 }

@@ -23,6 +23,7 @@ void aura_config_default(aura_config_t *cfg)
     cfg->text_queue_depth  = 16;
     cfg->event_queue_depth = 64;
     cfg->frame_pool_blocks = 16;
+    cfg->playback_sample_rate = 24000; /* Kokoro TTS 默认输出率 */
     cfg->log_level         = AURA_LOG_LVL_INFO;
     cfg->sm_auto_reset     = true;
     cfg->sm_auto_reset_ms  = 1000;
@@ -85,9 +86,10 @@ static char *trim(char *s)
 /* chain_param_<algo>.<key>：收集原始文本，类型转换交给 aura_chain_from_config
  * （只有它能查到算法的 param_specs）。键名超长在这里就拦下 —— snprintf 静默截断
  * 会让 "ns.very_long_key" 变成别的合法键，是那种查一整天的 bug。 */
-static aura_err_t add_chain_param(aura_config_t *cfg, const char *suffix, const char *val)
+static aura_err_t add_chain_param_to(aura_config_kv_t *params, uint32_t *count,
+                                     const char *suffix, const char *val)
 {
-    if (cfg->chain_param_count >= AURA_CONFIG_MAX_CHAIN_PARAMS) {
+    if (*count >= AURA_CONFIG_MAX_CHAIN_PARAMS) {
         AURA_LOGE(TAG, "too many chain_param_* keys (max %d)", AURA_CONFIG_MAX_CHAIN_PARAMS);
         return AURA_ERR_FULL;
     }
@@ -95,7 +97,7 @@ static aura_err_t add_chain_param(aura_config_t *cfg, const char *suffix, const 
         AURA_LOGE(TAG, "chain_param key must be '<algo>.<param>', got '%s'", suffix);
         return AURA_ERR_INVALID_ARG;
     }
-    aura_config_kv_t *kv = &cfg->chain_params[cfg->chain_param_count];
+    aura_config_kv_t *kv = &params[*count];
     if (strlen(suffix) >= sizeof(kv->key) || strlen(val) >= sizeof(kv->val)) {
         AURA_LOGE(TAG, "chain_param '%s' too long (key<%u, val<%u)", suffix, (unsigned)sizeof(kv->key),
                   (unsigned)sizeof(kv->val));
@@ -103,7 +105,7 @@ static aura_err_t add_chain_param(aura_config_t *cfg, const char *suffix, const 
     }
     snprintf(kv->key, sizeof(kv->key), "%s", suffix);
     snprintf(kv->val, sizeof(kv->val), "%s", val);
-    cfg->chain_param_count++;
+    (*count)++;
     return AURA_OK;
 }
 
@@ -197,7 +199,23 @@ static aura_err_t apply_kv(aura_config_t *cfg, const char *key, const char *val)
         return AURA_OK;
     }
     if (strncmp(key, "chain_param_", 12) == 0) {
-        return add_chain_param(cfg, key + 12, val);
+        return add_chain_param_to(cfg->chain_params, &cfg->chain_param_count, key + 12, val);
+    }
+    if (strcmp(key, "playback_chain") == 0) {
+        if (strlen(val) >= sizeof(cfg->playback_chain)) {
+            AURA_LOGE(TAG, "playback_chain syntax too long (max %u)",
+                      (unsigned)sizeof(cfg->playback_chain) - 1);
+            return AURA_ERR_INVALID_ARG;
+        }
+        snprintf(cfg->playback_chain, sizeof(cfg->playback_chain), "%s", val);
+        return AURA_OK;
+    }
+    if (strcmp(key, "playback_sample_rate") == 0) {
+        return parse_u32(val, &cfg->playback_sample_rate) ? AURA_OK : AURA_ERR_INVALID_ARG;
+    }
+    if (strncmp(key, "playback_chain_param_", 21) == 0) {
+        return add_chain_param_to(cfg->playback_chain_params, &cfg->playback_chain_param_count,
+                                  key + 21, val);
     }
     AURA_LOGW(TAG, "unknown config key '%s' ignored", key);
     return AURA_OK;

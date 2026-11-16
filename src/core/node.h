@@ -155,7 +155,10 @@ struct aura_node {
      * 并把输出帧头的 sample_rate 改写为输出采样率。
      *
      * 这两个字段只在**节点自己的 task 的 process 回调期间**有效且非线程安全：
-     * 节点的子任务/事件回调里不得调用 emit_audio（那属于 process 之外的上下文）。 */
+     * 节点的子任务/事件回调里不得调用 emit_audio（那属于 process 之外的上下文）。
+     * **例外**：音频源节点（produces_audio && !consumes_audio，如 TTS）没有输入帧，
+     * 允许在其自有 worker 中 emit_audio；此时 last_in_pts_valid 为 false，
+     * emit 使用节点自己填的 frame->pts_us。帧池与下游队列均线程安全。 */
     uint64_t last_in_pts_us;
     bool     last_in_pts_valid;
 

@@ -33,7 +33,8 @@ static void bridge_on_event(const aura_event_t *event, void *user)
 
     aura_flow_msg_t msg;
     memset(&msg, 0, sizeof(msg));
-    msg.kind = AURA_FLOW_EVENT;
+    msg.kind          = AURA_FLOW_EVENT;
+    bool custom_payload = false;
 
     switch (event->type) {
     case AURA_EVENT_ASR_PARTIAL:
@@ -50,7 +51,10 @@ static void bridge_on_event(const aura_event_t *event, void *user)
         break;
     case AURA_EVENT_VOICEPRINT_RESULT:
         snprintf(msg.topic, sizeof(msg.topic), "session.voiceprint");
-        msg.ctx.speaker_id = 0;
+        /* passed/score 在事件 union 里，payload 通常为空；显式编码给 flow 侧。 */
+        snprintf(msg.payload, sizeof(msg.payload), "passed=%d\nscore=%d",
+                 event->u.voiceprint.passed ? 1 : 0, event->u.voiceprint.score);
+        custom_payload = true;
         break;
     case AURA_EVENT_VAD_SPEECH_START:
         snprintf(msg.topic, sizeof(msg.topic), "vad.start");
@@ -85,7 +89,9 @@ static void bridge_on_event(const aura_event_t *event, void *user)
         return; /* 不关心的底层事件不进入 Agent 数据面 */
     }
 
-    snprintf(msg.payload, sizeof(msg.payload), "%s", event->payload);
+    if (!custom_payload) {
+        snprintf(msg.payload, sizeof(msg.payload), "%s", event->payload);
+    }
     msg.len = (uint32_t)strlen(msg.payload);
     if (msg.len == 0) {
         snprintf(msg.payload, sizeof(msg.payload), "%s", aura_event_type_name(event->type));

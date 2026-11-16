@@ -64,6 +64,13 @@ typedef struct aura_config {
     aura_config_kv_t chain_params[AURA_CONFIG_MAX_CHAIN_PARAMS];
     uint32_t         chain_param_count;
 
+    /* 播放链（Phase C）：`tts, src, playback`。首采样率 = TTS 输出率，
+     * 与采集链主采样率无关（SRC 负责降到管线率）。 */
+    char     playback_chain[256];
+    uint32_t playback_sample_rate;
+    aura_config_kv_t playback_chain_params[AURA_CONFIG_MAX_CHAIN_PARAMS];
+    uint32_t         playback_chain_param_count;
+
     /* Kconfig 式的模块裁剪开关（与编译期 AURA_BUILD_* 选项对应，
      * 运行期对未编译进来的模块给出明确错误而不是静默失效）。 */
     bool     enable_kws;

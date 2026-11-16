@@ -11,6 +11,7 @@
 #ifndef AURA_AGENT_AGENT_CORE_H
 #define AURA_AGENT_AGENT_CORE_H
 
+#include "agent/agent_stages.h"
 #include "agent/flow/flow_bus.h"
 #include "core/node.h"
 #include "core/pipeline/pipeline.h"
@@ -30,6 +31,12 @@ aura_event_bus_t *aura_agent_bus(void);
 
 /* 取 Agent 数据流总线（会话/轮次/工具/记忆的 stage 用）。 */
 aura_flow_bus_t *aura_agent_flow(void);
+
+/* 取 Agent stage 管理器（内部/测试用：查询 session/memory 状态）。 */
+aura_agent_stages_t *aura_agent_stages_get(void);
+
+/* 取长期存储（内部/测试用；Phase D 换 sqlite 后仍是同一抽象）。 */
+aura_flow_store_t *aura_agent_store(void);
 
 /* 取 agent 的状态机（只读查询；触发器经事件总线流动）。 */
 aura_sm_t *aura_agent_sm(void);

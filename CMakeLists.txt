@@ -37,7 +37,7 @@ option(AURA_BUILD_KWS        "编入 KWS 适配节点"           ON)
 option(AURA_BUILD_VOICEPRINT "编入声纹（SR）适配节点"       ON)
 option(AURA_BUILD_ASR        "编入 ASR 适配节点"           ON)
 option(AURA_BUILD_LLM        "编入 LLM 适配节点（需 soundproof LLM）" OFF)
-option(AURA_BUILD_TTS        "编入 TTS 适配节点（Phase C）"  OFF)
+option(AURA_BUILD_TTS        "编入 TTS 适配节点（需要 soundproof MNN）" ON)
 option(AURA_BUILD_BARGE_IN   "编入打断裁决模块"             ON)
 option(AURA_BUILD_NET        "编入网络传输模块"             OFF)
 

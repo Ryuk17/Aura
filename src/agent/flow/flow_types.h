@@ -59,9 +59,10 @@ typedef struct aura_flow_ctx {
 } aura_flow_ctx_t;
 
 typedef struct aura_flow_msg {
-    uint32_t        kind;  /* aura_flow_kind_t */
-    uint32_t        flags; /* aura_flow_flag_t 位或 */
-    uint64_t        seq;   /* 每 topic 单调递增 */
+    uint32_t        kind;    /* aura_flow_kind_t */
+    uint32_t        flags;   /* aura_flow_flag_t 位或 */
+    uint32_t        attempt; /* retry 中间件维护的重试次数 */
+    uint64_t        seq;     /* 每 topic 单调递增 */
     uint64_t        ts_us; /* 产生时刻 */
     aura_flow_ctx_t ctx;
     char            topic[AURA_FLOW_TOPIC_MAX];

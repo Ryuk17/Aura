@@ -56,6 +56,27 @@ aura_err_t aura_flow_mw_cancel_gate(aura_flow_msg_t *msg, aura_flow_next_fn next
 aura_err_t aura_flow_mw_metrics(aura_flow_msg_t *msg, aura_flow_next_fn next, void *user);
 aura_err_t aura_flow_mw_log(aura_flow_msg_t *msg, aura_flow_next_fn next, void *user);
 
+/* 校验 topic/len/kind；非法消息直接丢弃（计入 errors）。 */
+aura_err_t aura_flow_mw_validate(aura_flow_msg_t *msg, aura_flow_next_fn next, void *user);
+
+/* 超过 ctx.deadline_us 的消息丢弃（返回 AURA_ERR_ABORTED，计入 cancelled）。 */
+aura_err_t aura_flow_mw_deadline(aura_flow_msg_t *msg, aura_flow_next_fn next, void *user);
+
+/* 脱敏：password/token/secret 值、11 位手机号中间四位。（原地修改 payload） */
+aura_err_t aura_flow_mw_redact(aura_flow_msg_t *msg, aura_flow_next_fn next, void *user);
+
+/* 持久化：把 asr.final / tts.say / dialogue.intent / tool.result 的最近值写
+ * flow_store（user 传 aura_flow_store_t*）。Phase D 换 sqlite 后端。 */
+aura_err_t aura_flow_mw_persist(aura_flow_msg_t *msg, aura_flow_next_fn next, void *user);
+
+typedef struct aura_flow_retry_cfg {
+    uint32_t max_retries;
+} aura_flow_retry_cfg_t;
+
+/* 重试：handler 返回 AURA_ERR_AGAIN 时重新入队（user 传 retry_cfg_t*）。
+ * 只对未被取消/未 ABORT 的消息生效，attempt 计入消息并随重投递保留。 */
+aura_err_t aura_flow_mw_retry(aura_flow_msg_t *msg, aura_flow_next_fn next, void *user);
+
 /* stage worker 调用：从第 0 个中间件开始，最后落到 stage handler。 */
 aura_err_t aura_flow_mw_run(aura_flow_bus_t *bus, aura_flow_stage_t *stage,
                             aura_flow_msg_t *msg);

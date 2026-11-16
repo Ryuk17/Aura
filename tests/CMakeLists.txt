@@ -26,6 +26,33 @@ if(AURA_BUILD_TESTS)
 	aura_add_test(test_pipeline)
 	aura_add_test(test_algorithm)
 	aura_add_test(test_flow)
+	aura_add_test(test_agent_stages)
+	aura_add_test(test_agent_orchestrator)
+	aura_add_test(test_playback)
+endif()
+
+# flow_chain：真实 event_bus → flow_bridge → stage 的文本面闭环
+if(AURA_BUILD_TESTS)
+	add_executable(flow_chain flow_chain/flow_chain.c)
+	target_link_libraries(flow_chain PRIVATE
+		aura_agent aura_flow aura_core aura_utils aura_platform)
+	target_include_directories(flow_chain PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}
+		${CMAKE_CURRENT_SOURCE_DIR}/unit)
+	add_test(NAME flow_chain COMMAND flow_chain)
+	set_tests_properties(flow_chain PROPERTIES TIMEOUT 60 LABELS aura)
+endif()
+
+# playback_chain：tts.say → TTS → playback sink 的播放链闭环 + barge-in
+if(AURA_BUILD_TESTS)
+	add_executable(playback_chain playback_chain/playback_chain.c)
+	target_link_libraries(playback_chain PRIVATE
+		aura_agent aura_flow aura_core aura_utils aura_platform)
+	target_include_directories(playback_chain PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}
+		${CMAKE_CURRENT_SOURCE_DIR}/unit)
+	add_test(NAME playback_chain COMMAND playback_chain)
+	set_tests_properties(playback_chain PROPERTIES TIMEOUT 60 LABELS aura)
 endif()
 
 # host_sim：文件喂音频驱动全链路（Phase 1 出口验收，mock 节点，无模型依赖）

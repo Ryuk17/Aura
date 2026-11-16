@@ -19,6 +19,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "aura_playback.h"
 #include "utils/error.h"
 
 #ifdef __cplusplus
@@ -124,6 +125,14 @@ typedef struct aura_agent_config {
     /* 链上算法的参数覆盖；count 为 0 时本字段可为 NULL。 */
     const aura_agent_chain_param_t *chain_params;
     uint32_t    chain_param_count;
+
+    /* 播放链（Phase C）：`tts, src, playback`。NULL/空 = 不建播放链。
+     * 与采集链同属一个 pipeline，但拓扑独立（TTS 是音频源，不接麦克风上游）。 */
+    const char *playback_chain;
+    const aura_agent_chain_param_t *playback_chain_params;
+    uint32_t    playback_chain_param_count;
+    /* 播放链首采样率（TTS 引擎输出率），默认 24000；SRC 负责降到管线主采样率。 */
+    uint32_t    playback_sample_rate;
 } aura_agent_config_t;
 
 /* 用默认值填充配置结构（调用方先 memset 再调用，或直接用本函数）。 */
@@ -187,6 +196,10 @@ aura_err_t aura_agent_feed_audio(const void *pcm, uint32_t frame_count, uint32_t
 aura_err_t aura_agent_feed_ref_audio(const void *pcm, uint32_t frame_count, uint32_t channels,
                                      aura_agent_audio_fmt_t fmt, uint64_t pts_us,
                                      uint32_t timeout_ms);
+
+/* 注入播放 HAL（板级音频设备 / PC 文件 sink）。必须在 aura_agent_start 前调用；
+ * backend 结构体内容会被拷贝，调用后调用方可以释放。NULL 表示恢复 null 后端。 */
+aura_err_t aura_agent_set_playback_backend(const aura_playback_backend_t *backend);
 
 /* 主动打断当前播报（等价于业务侧判定"有效打断"）：停播 + 中止推理 + 回 Listening。 */
 aura_err_t aura_agent_interrupt(void);

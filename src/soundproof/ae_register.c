@@ -47,6 +47,12 @@ aura_err_t ae_register_all(void)
         return rc;
     }
 #endif
+#if AURA_BUILD_TTS
+    rc = accept_existing(ae_tts_register_all());
+    if (rc != AURA_OK) {
+        return rc;
+    }
+#endif
 #endif
 
     AURA_LOGI(TAG, "soundproof adapters registered (%u algorithms)", aura_algo_count());

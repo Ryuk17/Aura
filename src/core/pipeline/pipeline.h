@@ -18,7 +18,8 @@
  *
  * pts 维护：`aura_pipeline_feed` 由调用方给出首帧 pts；此后 pipeline 按
  * `帧长 / 采样率` 自动推进下游 pts，保证各通路严格对齐（todo.md 4.2）。
- * 节点**不得**自行改写 pts，唯一例外是 `caps.changes_frame_rate` 的节点（SRC）。
+ * 节点**不得**自行改写 pts，例外是 `caps.changes_frame_rate` 的节点（SRC，
+ * 自算输出时基）与音频源节点（TTS：没有输入帧可继承，emit 使用自填 pts）。
  *
  * 帧内存：全部来自 pipeline 自有的 mem_pool，运行期无 malloc/free。
  */
@@ -127,6 +128,12 @@ aura_err_t aura_pipeline_stop(aura_pipeline_t *p);
 aura_err_t aura_pipeline_feed(aura_pipeline_t *p, const void *pcm, uint32_t frame_count,
                               uint32_t channels, aura_sample_fmt_t fmt, uint64_t pts_us,
                               uint32_t timeout_ms);
+
+/* 向链上的**文本源**（consumes_text 且没有文本上游）推送文本。
+ * 典型用途：Agent 的 tts.say → TTS 节点。链里没有文本源返回 AURA_ERR_NOT_FOUND。 */
+aura_err_t aura_pipeline_feed_text(aura_pipeline_t *p, const char *text, uint32_t len,
+                                   aura_text_flag_t flag, uint64_t pts_us,
+                                   uint32_t timeout_ms);
 
 /* 喂 AEC 参考音频（播放回采），推给链上**唯一**的 caps.consumes_ref_audio 节点。
  *

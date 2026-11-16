@@ -52,6 +52,7 @@ add_library(aura_core STATIC
 	core/event_bus/event_bus.c
 	core/state_machine/state_machine.c
 	core/config/config.c
+	core/playback/playback.c
 )
 target_link_libraries(aura_core PUBLIC aura_utils)
 
@@ -120,5 +121,17 @@ endif()
 # Phase C 在此填充 orchestrator / dialogue / memory / tools。
 add_library(aura_agent STATIC
 	agent/agent_core.c
+	agent/agent_stages.c
+	agent/llm/llm.c
+	agent/memory/memory.c
+	agent/stages/dialogue_stage.c
+	agent/stages/memory_stage.c
+	agent/stages/orchestrator_stage.c
+	agent/stages/session_runtime.c
+	agent/stages/session_stage.c
+	agent/stages/stage_proto.c
+	agent/stages/tool_runner_stage.c
+	agent/stages/tts_egress_stage.c
+	agent/tools/tools.c
 )
 target_link_libraries(aura_agent PUBLIC aura_core aura_flow aura_soundproof)
